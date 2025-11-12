@@ -1,0 +1,25 @@
+# Knowledge Graph Extraction Pipeline Requirements
+
+# Core dependencies
+langchain-openai>=0.1.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Image processing dependencies
+easyocr>=1.7.0              # OCR text recognition for image filtering
+Pillow>=10.0.0              # Image processing
+tqdm>=4.66.0                # Progress bar for batch processing
+
+# FastAPI and web server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+aiofiles>=23.2.0
+
+# Optional: Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0
+
+# Optional: Type checking
+mypy>=1.7.0

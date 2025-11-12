@@ -1,0 +1,138 @@
+# 角色
+你是一个知识图谱构建专家，从表格描述中提取**核心商业实体和关系**，服务于投资研究场景。
+
+# 任务
+从表格描述中提取**高价值实体**（公司、产品、关键指标、技术），避免冗余和通用概念。
+
+# 输入
+表格描述：{description}
+
+# 核心实体类型（优先提取）
+1. **Company**: 公司名称（如：象量科技、阿里巴巴）
+   - attributes需包含：industry（行业）、stage（融资阶段）等
+2. **Person**: 人名（如：张三-CEO）
+   - attributes需包含：role（职位）、expertise（专长）等  
+3. **Product**: 产品/服务名（如：象量投研平台、AI数据库）
+   - attributes需包含：version（版本）、features（功能）等
+4. **Technology**: 技术术语（如：多模态大模型、知识图谱）
+   - attributes需包含：application_domain（应用领域）等
+5. **TagConcept**: 赛道/细分领域（如：AI投研、脑机接口）
+6. **Metric**: 关键指标（如：营收、用户数、ARPU、净利润）
+   - attributes需包含：value（数值）、unit（单位）、time（时间）等
+
+# ❌ 不要提取
+- 表格结构元素（第一列、表头、行数）
+- 通用术语（数据、指标、结果）
+- 抽象描述（增长趋势、对比分析）
+- 时间点本身（2026年、第一年）
+
+# ⚠️ 提取规范
+1. **只提取明确提及的实体**，不推测
+2. **实体名称要具体**：用"营收"而非"营业收入预测"
+3. **数值必须精确**：如"营收1000万元"而非"营收增长"
+4. **关系要有意义**：避免"包含"、"展示"等弱关系
+
+# 输出格式
+严格按照 JSON 格式输出，**禁止使用反斜杠和控制字符**：
+
+{{
+  "entities": [
+    {{
+      "name": "实体名称",
+      "type": "类型（Company|Person|Product|Technology|TagConcept|Metric|Other）",
+      "description": "简洁描述（一句话）",
+      "attributes": [
+        {{"name": "属性名", "value": "属性值"}}
+      ]
+    }}
+  ],
+  "relations": [
+    {{
+      "source": "源实体名称",
+      "target": "目标实体名称",
+      "type": "关系类型（has_metric|uses_technology|in_segment|contributes_to|competes_with等）",
+      "description": "关系描述"
+    }}
+  ]
+}}
+
+# 示例
+**输入**：
+表格描述：展示2026-2028年核心指标预测，订阅付费客户从2000增至30000人，ARPU从1000+增至2000+，营收从1000万增至1.5亿，净利润从无到3000万+，呈现快速增长趋势。本地部署客户从10+增至200+。
+
+**输出**：
+{{
+  "entities": [
+    {{
+      "name": "订阅付费客户",
+      "type": "Metric",
+      "description": "订阅付费的客户数量指标",
+      "attributes": [
+        {{"name": "metric_type", "value": "用户指标"}},
+        {{"name": "unit", "value": "人"}},
+        {{"name": "year_2026", "value": "2000+"}},
+        {{"name": "year_2027", "value": "15000+"}},
+        {{"name": "year_2028", "value": "30000+"}},
+        {{"name": "trend", "value": "快速增长"}}
+      ]
+    }},
+    {{
+      "name": "营收",
+      "type": "Metric",
+      "description": "公司营业收入预测",
+      "attributes": [
+        {{"name": "metric_type", "value": "财务指标"}},
+        {{"name": "unit", "value": "元"}},
+        {{"name": "year_2026", "value": "1000万"}},
+        {{"name": "year_2027", "value": "5000万"}},
+        {{"name": "year_2028", "value": "1.5亿"}},
+        {{"name": "trend", "value": "快速增长"}}
+      ]
+    }},
+    {{
+      "name": "ARPU",
+      "type": "Metric",
+      "description": "平均每用户收入",
+      "attributes": [
+        {{"name": "metric_type", "value": "财务指标"}},
+        {{"name": "unit", "value": "元"}},
+        {{"name": "year_2026", "value": "1000+"}},
+        {{"name": "year_2027", "value": "1000+"}},
+        {{"name": "year_2028", "value": "2000+"}},
+        {{"name": "trend", "value": "增长"}}
+      ]
+    }},
+    {{
+      "name": "本地部署客户",
+      "type": "Metric",
+      "description": "本地部署客户数量",
+      "attributes": [
+        {{"name": "metric_type", "value": "用户指标"}},
+        {{"name": "unit", "value": "家"}},
+        {{"name": "year_2026", "value": "10+"}},
+        {{"name": "year_2027", "value": "50+"}},
+        {{"name": "year_2028", "value": "200+"}},
+        {{"name": "trend", "value": "增长"}}
+      ]
+    }}
+  ],
+  "relations": [
+    {{
+      "source": "订阅付费客户",
+      "target": "营收",
+      "type": "contributes_to",
+      "description": "订阅用户增长驱动营收增长"
+    }},
+    {{
+      "source": "ARPU",
+      "target": "营收",
+      "type": "contributes_to",
+      "description": "ARPU提升贡献营收增长"
+    }}
+  ]
+}}
+
+# 最后提醒
+- 只提取**明确出现**的实体，避免推测
+- **数量控制**：3-8个实体，2-6个关系即可
+- 输出必须是**合法JSON**，禁止 `/` 等特殊字符

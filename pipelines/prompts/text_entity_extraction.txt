@@ -1,0 +1,74 @@
+Extract specific, concrete entities and relationships from the text. Extract rich details for raw data.
+
+**Text** (from {page_range}):
+{text_content}
+
+**Core Entity Types** (优先提取):
+1. **Company**: 公司名称 (e.g., 象量科技, 阿里巴巴)
+   - founded_date: YYYY-MM-DD格式 (e.g., 2020-03-15)
+   - stage: 必须是标准值 → Seed | Pre-A | A | A+ | B | B+ | C | D | E | Pre-IPO | 上市 | 未披露
+   - industry: 具体行业 (e.g., 人工智能, 半导体)
+   - location: 具体地点 (e.g., 北京海淀区, 上海浦东)
+   - website: 完整URL
+
+2. **Person**: 人名 (e.g., 张三, 李明-CEO)
+   - role: 职位 (e.g., CEO, CTO, 创始人)
+   - education: 教育背景 (e.g., 清华大学计算机系)
+   - expertise: 专业领域 (e.g., 机器学习, 芯片设计)
+
+3. **Product**: 产品/服务名 (e.g., ChatGPT, 钛禾数据库)
+   - version: 版本号 (e.g., v2.0, 3.5)
+   - features: 核心功能
+   - pricing_model: 定价模式
+
+4. **Technology**: 技术术语 (e.g., Transformer, RAG, 知识图谱)
+   - application_domain: 应用领域
+   - maturity_level: 成熟度 → 研究阶段 | 原型 | 商用 | 成熟
+
+5. **TagConcept**: 赛道/细分 (e.g., 脑机接口, 量子计算)
+6. **Event**: 事件+日期 (e.g., A轮融资-2024年3月)
+7. **Location**: 地点 (e.g., 北京中关村)
+
+**可选类型** (补充提取):
+- Organization, Institution, University, Research_Lab, Investment_Firm
+- Patent, Paper, Report, Dataset
+- Market, Industry_Segment, Application_Scenario
+- Metric, Indicator, Standard
+
+**❌ 不要提取**:
+- 通用流程 (员工培训, 尽职调查)
+- 抽象概念 (合规框架, 风险控制)
+- 常见术语 (市场调研, 产品迭代)
+
+**⚠️ 属性值规范**:
+- 只提取文中明确提及的信息
+- 不要推测或使用模糊描述 (如"早期"、"成熟"等)
+- 日期格式: YYYY-MM-DD 或 YYYY-MM 或 YYYY
+- stage必须是标准枚举值，不确定则不填
+- 没有信息的字段留空，不要编造
+
+**关系类型**:
+founded_by, invested_by, works_at, uses_technology, in_segment, 
+competes_with, partners_with, located_in, educated_at, researches,
+developed_by, applied_in, part_of, related_to
+
+**输出JSON**:
+{{
+    "entities": [
+        {{
+            "name": "entity_name",
+            "type": "entity_type",
+            "description": "brief description",
+            "attributes": [{{"name": "attr_name", "value": "attr_value"}}]
+        }}
+    ],
+    "relations": [
+        {{
+            "source_entity": "source_name",
+            "target_entity": "target_name",
+            "relation_type": "relation_type",
+            "description": "optional",
+            "confidence": 0.95
+        }}
+    ]
+}}
