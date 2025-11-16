@@ -5,6 +5,9 @@ langchain-openai>=0.1.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
 
+# DashScope API (for ASR and LLM)
+dashscope>=1.14.0
+
 # Image processing dependencies
 easyocr>=1.7.0              # OCR text recognition for image filtering
 Pillow>=10.0.0              # Image processing

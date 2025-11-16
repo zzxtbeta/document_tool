@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import asyncio
 from contextlib import asynccontextmanager
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
@@ -24,12 +28,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 import dotenv
 
-from api_models import (
+from api.models import (
     ExtractRequest, ExtractResponse, AsyncTaskResponse, TaskResponse,
     HealthResponse, ErrorResponse, ErrorDetail, ResponseMetadata,
     TaskStatus, TaskStatusData, ExtractResponseData, KnowledgeGraphData
 )
-from text_pipline import TextKnowledgeGraphPipeline, KnowledgeGraph
+from pipelines.text_pipeline import TextKnowledgeGraphPipeline, KnowledgeGraph
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -257,6 +261,19 @@ async def add_request_id_and_logging(request: Request, call_next):
     
     finally:
         logging.setLogRecordFactory(old_factory)
+
+
+# =============================================================================
+# ROUTERS
+# =============================================================================
+
+# Import and register audio router
+try:
+    from api.audio_api import router as audio_router
+    app.include_router(audio_router)
+    logger.info("Audio transcription routes registered")
+except Exception as e:
+    logger.warning(f"Failed to register audio routes: {e}")
 
 
 # =============================================================================

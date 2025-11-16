@@ -36,6 +36,7 @@ env/
 # Output files
 parsed/
 data/
+uploads/
 
 # OS
 .DS_Store
