@@ -119,6 +119,33 @@ output_dir: uploads/audio               # 输出目录（可选）
 
 ---
 
+### 3. 长音频 UI 相关接口（新增要求）
+
+为 Web UI 增加长音频 URL 提交、任务历史与结果摘要展示能力。
+
+#### Requirement: 长音频 URL 提交表单
+- UI MUST 提供独立表单，允许用户填写远程音频 URL、模型（`paraformer-v2` / `paraformer-8k-v2`）以及可选语言提示。
+- 表单提交后调用 `POST /api/v1/audio/transcribe-long`，并立即反馈内部 `task_id`、DashScope `task_id` 以及排队提示（含 24h TTL 说明）。
+- 表单应校验 URL 可用性（必填、HTTP/HTTPS/OSS），并展示 DashScope 限制（1-100 个 URL、2GB/12h 上限）。
+
+#### Requirement: 任务中心视图
+- UI SHALL 展示任务列表，包含短/长音频（类型标签）、状态（PENDING/RUNNING/SUCCEEDED/FAILED）、模型、提交时间、TTL 倒计时。
+- 列表数据来源：
+  - 长音频：`GET /api/v1/audio/transcribe-long/{task_id}` + `GET /api/v1/audio/dashscope/tasks`
+  - 短音频：本地上传记录（内存/IndexedDB）或后端补齐后扩展
+- 列表项需要提供操作按钮：查看详情、下载 Markdown（短）、下载 JSON/音频（长）、取消任务（调用 `/dashscope/tasks/{dashscope_task_id}/cancel`，仅 PENDING 状态）。
+
+#### Requirement: 任务详情摘要（Markdown/Card）
+- 当用户点击列表项时，UI SHALL 打开 Drawer/Modal，将 JSON 结果关键信息（音频 URL、语言、subtask_status、transcription_url、本地缓存路径）渲染为易读 Markdown 或卡片。
+- 对 `local_result_paths` 中的 JSON，提供“下载 JSON”按钮；对 `local_audio_paths` 提供“下载音频”按钮。
+- 对成功的长音频任务，默认展示 DashScope 文本摘要（可从 JSON `text` 字段或自定义字段提取）；若 JSON 中缺少原文，需要提示“请下载 JSON 查看完整内容”。
+
+#### Requirement: DashScope 代理接口集成
+- UI MUST 使用新增的 `/api/v1/audio/dashscope/tasks` 和 `/api/v1/audio/dashscope/tasks/{dashscope_task_id}` 接口来展示历史任务及底层详情，默认查询最近 24h，支持分页与状态过滤。
+- 当用户点击“取消”按钮时，调用 `/api/v1/audio/dashscope/tasks/{dashscope_task_id}/cancel` 并在 UI 中反馈结果。
+
+---
+
 ### 2. GET /api/v1/audio/download/{task_id}（新增）
 
 **描述**：下载指定任务的 Markdown 文件

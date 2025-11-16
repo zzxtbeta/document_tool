@@ -386,6 +386,19 @@ curl http://localhost:8000/api/v1/tasks/{task_id}
 | `/api/v1/extract` | POST | 上传文件提取知识图谱 |
 | `/api/v1/tasks/{task_id}` | GET | 查询异步任务状态 |
 
+#### 🎙️ 音频转写 API
+
+| 端点 | 方法 | 用途 |
+|------|------|------|
+| `/api/v1/audio/transcribe` | POST | 上传短音频文件，立即返回转写/纪要（支持 JSON / Markdown 输出） |
+| `/api/v1/audio/transcribe-long` | POST | 提交远程 URL 的长音频任务（DashScope paraformer 异步）并返回内部 `task_id` |
+| `/api/v1/audio/transcribe-long/{task_id}` | GET | 查询长音频任务状态，含 DashScope 结果、本地缓存路径、TTL 信息 |
+| `/api/v1/audio/dashscope/tasks/{dashscope_task_id}` | GET | 代理 DashScope 单任务查询，透传 `request_id/output/usage` |
+| `/api/v1/audio/dashscope/tasks` | GET | 代理 DashScope 批量查询，支持时间窗/状态/模型过滤及分页 |
+| `/api/v1/audio/dashscope/tasks/{dashscope_task_id}/cancel` | POST | 代理 DashScope 取消排队任务（仅 PENDING 状态有效） |
+| `/api/v1/audio/download/{task_id}` | GET | 下载短音频任务生成的 Markdown 纪要文件 |
+| `/api/v1/audio/health` | GET | 音频服务健康检查（模型/阈值配置） |
+
 ### 同步 vs 异步处理
 
 - **小文件** (< 10MB, < 50页): 同步返回结果 (status 200)

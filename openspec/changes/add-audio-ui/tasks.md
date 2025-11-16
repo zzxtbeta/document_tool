@@ -325,6 +325,37 @@
   - [x] 更新完成总结
   - [x] 记录新增功能
 
+## 阶段 9：长音频 & 任务中心 UI ✨ 新增
+
+### 9.1 方案与文档
+- [x] 更新提案/设计，描述长音频 URL 表单、DashScope 队列提示、历史任务查看需求
+- [x] 在 README / UI 指南中补充长音频操作说明与 JSON 示例
+
+### 9.2 前端组件扩展
+- [x] 新增 `LongAudioForm` 组件：输入远程 URL、模型、语言提示，展示 DashScope 限制
+- [x] 新增 `TaskHistoryPanel` 组件：展示短/长任务列表、状态、TTL 倒计时、操作按钮
+- [x] 新增 `TaskDetailDrawer`（或 Modal）：以 Markdown/Card 方式提炼 JSON 关键信息（如总时长、识别文本片段、subtask_status）
+- [x] 为成功任务提供 JSON/音频下载入口（来自后端 local_path）
+
+### 9.3 API 集成
+- [x] 调用 `POST /api/v1/audio/transcribe-long` 提交 URL；展示 `task_id` 和排队提示
+- [x] 轮询/刷新 `GET /api/v1/audio/transcribe-long/{task_id}` 显示状态、TTL、local_result_paths
+- [x] 集成 DashScope 代理接口：
+  - [x] `GET /api/v1/audio/dashscope/tasks` 显示历史/分页
+  - [x] `GET /api/v1/audio/dashscope/tasks/{dashscope_task_id}` 查看底层详情
+  - [x] `POST /api/v1/audio/dashscope/tasks/{dashscope_task_id}/cancel` 取消排队任务
+
+### 9.4 交互与样式
+- [x] 为长/短任务提供标签和状态 chip（PENDING/RUNNING/SUCCEEDED/FAILED）
+- [x] 显示 DashScope TTL 倒计时与本地缓存路径提示
+- [x] Markdown 摘要区：对 JSON 结果提取“音频 URL、语言、识别片段”并渲染为易读块
+- [x] 历史列表支持搜索/过滤（按模型、状态、日期）
+
+### 9.5 测试与验收
+- [x] 手动验证长音频 URL 提交流程、状态刷新、结果渲染
+- [x] 验证任务历史在 API 重载后依然可读（依赖后端缓存或 DashScope 查询）
+- [x] 补充 UI 截图/文档，指导用户区分短/长流程
+
 ### 7.2 发布准备
 
 - [x] 代码提交
@@ -430,6 +461,30 @@
 - 语种下拉选择器
 - 多行文本输入框（专业术语）
 - 使用示例提示
+
+### 🆕 长音频 & 任务中心 UI（2025-11-16 完成）
+
+**长音频 URL 提交：**
+- `LongAudioForm` 组件：支持远程 URL 输入、模型选择、语言提示
+- 实时显示 DashScope 队列限制和 TTL 规则
+- 提交后显示 task_id 和排队状态提示
+
+**任务历史管理：**
+- `TaskHistoryPanel` 组件：统一展示短/长音频任务列表
+- 实时状态刷新、TTL 倒计时显示
+- 支持按状态过滤（PENDING/RUNNING/SUCCEEDED/FAILED）
+- 一键刷新、查看详情、取消任务
+
+**任务详情展示：**
+- `TaskDetailDrawer` 组件：侧滑抽屉展示任务详情
+- Markdown 摘要区：提取关键信息（URL、语言、识别片段）
+- JSON/音频文件下载链接
+- 实时刷新和取消操作
+
+**API 集成：**
+- 完整集成 DashScope 代理接口
+- 支持任务轮询和状态查询
+- 错误处理和类型安全
 
 ### 📦 交付物清单
 

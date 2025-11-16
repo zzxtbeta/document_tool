@@ -10,7 +10,7 @@ Date: 2025-11-13
 from typing import Optional, List
 from enum import Enum
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AnyUrl
 
 
 # =============================================================================
@@ -100,3 +100,108 @@ class AsyncTaskResponse(BaseModel):
     data: dict = Field(description="Task information (task_id, status, estimated_time)")
     error: Optional[str] = Field(default=None, description="Error message if failed")
     metadata: dict = Field(description="Request metadata")
+
+
+class LongAudioTranscriptionRequest(BaseModel):
+    """Request body for paraformer long-audio transcription"""
+    file_urls: List[AnyUrl] = Field(
+        description="List of HTTP/HTTPS/OSS URLs pointing to audio files",
+        min_items=1,
+        max_items=100
+    )
+    model: str = Field(
+        default="paraformer-v2",
+        description="DashScope paraformer model (paraformer-v2 or paraformer-8k-v2)"
+    )
+    language_hints: Optional[List[str]] = Field(
+        default=None,
+        description="Language codes (only valid when model=paraformer-v2)"
+    )
+
+
+class LongAudioTaskInfo(BaseModel):
+    """Response payload for long-audio submission"""
+    task_id: str = Field(description="Internal task identifier")
+    dashscope_task_id: str = Field(description="DashScope task identifier")
+    task_status: str = Field(description="DashScope task status (PENDING/RUNNING/...)" )
+    model: str = Field(description="Model used for transcription")
+
+
+class LongAudioSubmissionResponse(BaseModel):
+    """Submission response wrapper"""
+    success: bool = Field(default=True, description="Whether submission succeeded")
+    data: LongAudioTaskInfo = Field(description="Submission data")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    metadata: dict = Field(description="Response metadata (task_id, timestamp)")
+
+
+class LongAudioStatusData(BaseModel):
+    """Detailed status for a long-audio transcription task"""
+    task_id: str = Field(description="Internal task identifier")
+    dashscope_task_id: str = Field(description="DashScope task identifier")
+    task_status: str = Field(description="Current DashScope task status")
+    model: str = Field(description="Model used for transcription")
+    file_urls: List[AnyUrl] = Field(description="Submitted audio URLs")
+    language_hints: Optional[List[str]] = Field(
+        default=None,
+        description="Language hints supplied during submission"
+    )
+    submitted_at: str = Field(description="Submission timestamp (ISO8601)")
+    updated_at: str = Field(description="Last update timestamp (ISO8601)")
+    results: Optional[List[dict]] = Field(
+        default=None,
+        description="DashScope result payload (mirrors API response)"
+    )
+    local_result_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Local file paths of cached transcription JSON"
+    )
+    local_audio_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Local copies of source audio files"
+    )
+    local_dir: Optional[str] = Field(
+        default=None,
+        description="Local directory containing cached audio/results"
+    )
+    remote_result_ttl_seconds: Optional[int] = Field(
+        default=None,
+        description="Declared TTL (seconds) for remote DashScope result availability"
+    )
+    remote_result_expires_at: Optional[str] = Field(
+        default=None,
+        description="ISO8601 timestamp when DashScope result URL is expected to expire"
+    )
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+
+
+class LongAudioStatusResponse(BaseModel):
+    """Status response wrapper"""
+    success: bool = Field(default=True, description="Whether status retrieval succeeded")
+    data: LongAudioStatusData = Field(description="Status data")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    metadata: dict = Field(description="Response metadata")
+
+
+class DashScopeTaskFetchResponse(BaseModel):
+    """Proxy response for DashScope单任务查询"""
+    success: bool = Field(default=True, description="Whether fetch succeeded")
+    data: dict = Field(description="DashScope payload (request_id/output/usage)")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    metadata: dict = Field(default_factory=dict, description="Echoed query metadata")
+
+
+class DashScopeTaskListResponse(BaseModel):
+    """Proxy response for DashScope批量查询"""
+    success: bool = Field(default=True, description="Whether list succeeded")
+    data: dict = Field(description="DashScope list payload (total/data/page info)")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    metadata: dict = Field(default_factory=dict, description="Echoed query metadata")
+
+
+class DashScopeTaskCancelResponse(BaseModel):
+    """Proxy response for DashScope取消任务"""
+    success: bool = Field(default=True, description="Whether cancel succeeded")
+    data: dict = Field(description="DashScope cancel payload (request_id)")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    metadata: dict = Field(default_factory=dict, description="Echoed request metadata")

@@ -2,6 +2,9 @@ import { AudioUploader } from './components/AudioUploader';
 import { ProgressBar } from './components/ProgressBar';
 import { MarkdownPreview } from './components/MarkdownPreview';
 import { AdvancedSettings } from './components/AdvancedSettings';
+import { LongAudioForm } from './components/LongAudioForm';
+import { TaskHistoryPanel } from './components/TaskHistoryPanel';
+import { TaskDetailDrawer } from './components/TaskDetailDrawer';
 import { useAudioStore } from './store/useAudioStore';
 
 function App() {
@@ -92,6 +95,8 @@ function App() {
               </div>
             )}
 
+            <LongAudioForm />
+
             {/* Help Section */}
             <div className="bg-accent-blue bg-opacity-5 rounded-xl p-6 border border-accent-blue border-opacity-20">
               <h3 className="text-sm font-semibold text-primary-900 mb-3">
@@ -108,7 +113,7 @@ function App() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-blue mt-0.5">•</span>
-                  <span>处理时间：通常 10-30 秒（取决于音频长度）</span>
+                  <span>处理时间：短音频通常 10-30 秒；长音频需等待 DashScope 队列</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-blue mt-0.5">•</span>
@@ -118,14 +123,18 @@ function App() {
             </div>
           </div>
 
-          {/* Right Column: Preview */}
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-primary-200 lg:sticky lg:top-8 lg:self-start">
-            <h2 className="text-lg font-semibold text-primary-900 mb-4">
-              会议纪要预览
-            </h2>
-            <div className="overflow-y-auto max-h-[calc(100vh-12rem)]">
-              <MarkdownPreview />
+          {/* Right Column */}
+          <div className="space-y-6 lg:sticky lg:top-8 lg:self-start">
+            <div className="bg-white rounded-xl shadow-sm p-6 border border-primary-200">
+              <h2 className="text-lg font-semibold text-primary-900 mb-4">
+                会议纪要预览
+              </h2>
+              <div className="overflow-y-auto max-h-[40vh]">
+                <MarkdownPreview />
+              </div>
             </div>
+
+            <TaskHistoryPanel />
           </div>
         </div>
       </main>
@@ -136,6 +145,8 @@ function App() {
           Powered by DashScope ASR & LLM
         </p>
       </footer>
+
+      <TaskDetailDrawer />
     </div>
   );
 }
