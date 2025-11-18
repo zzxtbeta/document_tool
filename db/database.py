@@ -2,6 +2,8 @@
 
 from typing import Optional
 from psycopg_pool import AsyncConnectionPool
+from psycopg.types.json import set_json_loads
+import json
 import logging
 import os
 import dotenv
@@ -9,6 +11,9 @@ import asyncio
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# 配置 psycopg 使用 Python 标准库的 json 解码器
+set_json_loads(json.loads)
 
 
 # get the database URI from environment variables
@@ -58,9 +63,33 @@ class DatabaseManager:
                 datetime.now()
             )  # set the health check time when initializing
             logger.info("Database connection pool initialized successfully")
+            
+            # 自动创建 PDF 提取表
+            await cls._ensure_pdf_table_exists()
         except Exception as e:
             logger.error(f"Database connection pool initialization failed: {str(e)}")
             raise
+    
+    @classmethod
+    async def _ensure_pdf_table_exists(cls) -> None:
+        """确保 PDF 提取表存在"""
+        try:
+            from pathlib import Path
+            sql_path = Path(__file__).parent / "migrations" / "create_pdf_extraction_tasks.sql"
+            if not sql_path.exists():
+                logger.debug("PDF table migration not found, skipping")
+                return
+                
+            sql = sql_path.read_text(encoding="utf-8")
+            # 拆分多条 SQL 语句并逐条执行
+            statements = [stmt.strip() for stmt in sql.split(';') if stmt.strip()]
+            async with cls._pool.connection() as conn:
+                for statement in statements:
+                    if statement:  # 跳过空语句
+                        await conn.execute(statement)
+            logger.info("PDF extraction table ensured")
+        except Exception as e:
+            logger.warning(f"Failed to ensure PDF table: {e}")
 
     @classmethod
     async def get_pool(cls, max_retries: int = 3) -> AsyncConnectionPool:

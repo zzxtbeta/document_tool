@@ -1,0 +1,398 @@
+"""
+PDF Extraction Service
+
+Author: AI Assistant
+Date: 2025-11-18
+"""
+
+import os
+import json
+import uuid
+import logging
+import tempfile
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+from openai import OpenAI
+
+from pipelines.pdf_pipeline import PDFPipeline, PDFValidator
+from pipelines.storage import OSSStorageClient
+from db.pdf_operations import (
+    create_pdf_extraction_task,
+    get_pdf_extraction_task,
+    update_task_status,
+    update_extraction_result,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class PDFExtractionService:
+    """PDF 提取服务"""
+    
+    def __init__(self):
+        self.pdf_pipeline = PDFPipeline()
+        self.storage = OSSStorageClient()
+        
+        # Qwen VL 客户端配置通过环境变量控制,便于在不同部署之间切换
+        vl_base_url = os.getenv(
+            "VL_BASE_URL",
+            os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        )
+        vl_model_name = os.getenv("VL_MODEL_NAME", os.getenv("MODEL_NAME", "qwen3-vl-flash"))
+        self.vl_client = OpenAI(
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            base_url=vl_base_url,
+        )
+        self.vl_model = vl_model_name
+        
+        # 加载提取 Prompt (允许通过环境变量覆盖默认模板)
+        prompt_file = os.getenv("PDF_EXTRACTION_PROMPT_FILE")
+        if prompt_file:
+            prompt_path = Path(prompt_file)
+            if not prompt_path.is_file():
+                logger.warning("Custom prompt file not found: %s, fallback to default", prompt_path)
+                prompt_path = None
+        else:
+            prompt_filename = os.getenv("PDF_PROMPT_FILENAME", "bp_extraction.txt")
+            prompt_path = Path(__file__).parent / "prompts" / prompt_filename
+        if prompt_path is None:
+            prompt_path = Path(__file__).parent / "prompts" / "bp_extraction.txt"
+        self.extraction_prompt = prompt_path.read_text(encoding="utf-8")
+    
+    async def submit_extraction(
+        self,
+        pdf_file_path: Path,
+        user_id: str,
+        project_id: str,
+        source_filename: str,
+    ) -> str:
+        """
+        提交 PDF 提取任务
+        
+        Args:
+            pdf_file_path: PDF 文件路径
+            user_id: 用户 ID
+            project_id: 项目 ID
+            source_filename: 原始文件名
+            
+        Returns:
+            task_id: 任务 ID
+        """
+        # 1. 验证 PDF
+        is_valid, error_msg, page_count = self.pdf_pipeline.validate_pdf(pdf_file_path)
+        if not is_valid:
+            raise ValueError(f"PDF 验证失败: {error_msg}")
+        
+        logger.info(f"PDF validated: {source_filename}, {page_count} pages")
+        
+        # 2. 生成任务 ID
+        task_id = str(uuid.uuid4())
+        
+        # 3. 上传 PDF 到 OSS（保持原始文件名）
+        oss_prefix = self._build_pdf_prefix(project_id, task_id)
+        pdf_object_key = f"{oss_prefix}/{source_filename}"
+        
+        self.storage.upload_file(
+            pdf_file_path,
+            pdf_object_key,
+            content_type="application/pdf"
+        )
+        
+        pdf_url = self.storage.build_public_url(pdf_object_key)
+        logger.info(f"PDF uploaded to OSS: {pdf_url}")
+        
+        # 4. 创建数据库记录
+        await create_pdf_extraction_task(
+            task_id=task_id,
+            pdf_url=pdf_url,
+            pdf_object_key=pdf_object_key,
+            user_id=user_id,
+            project_id=project_id,
+            source_filename=source_filename,
+            oss_object_prefix=oss_prefix,
+            page_count=page_count,
+        )
+        
+        logger.info(f"Created task {task_id} for PDF extraction")
+        
+        # 5. 提交到异步队列处理
+        from pipelines.async_task_queue import get_task_queue, TaskPriority
+        queue = get_task_queue()
+        success = await queue.submit_task(task_id, TaskPriority.NORMAL)
+        if success:
+            logger.info(f"Task {task_id} submitted to processing queue")
+        else:
+            logger.error(f"Failed to submit task {task_id} to queue")
+        
+        return task_id
+    
+    async def process_pdf(self, task_id: str):
+        """
+        处理 PDF 文件 (异步任务)
+        
+        Args:
+            task_id: 任务 ID
+        """
+        logger.info(f"[{task_id}] Starting PDF processing")
+        
+        # 本地临时目录
+        temp_dir = Path("uploads/pdf") / task_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # 1. 更新状态为 PROCESSING
+            await update_task_status(
+                task_id,
+                "PROCESSING",
+                started_at=datetime.now()
+            )
+            
+            # 2. 获取任务信息
+            task = await get_pdf_extraction_task(task_id)
+            if not task:
+                raise RuntimeError(f"Task {task_id} not found")
+            
+            # 3. 下载 PDF 到本地临时目录（保持原始文件名）
+            pdf_path = await self._download_pdf_to_local(
+                task["pdf_object_key"], 
+                temp_dir,
+                task["source_filename"]
+            )
+            
+            # 4. 转换为图片（保存到本地）
+            image_paths = await self._convert_pdf_to_images_local(pdf_path, temp_dir)
+            
+            # 5. 调用 Qwen VL 提取信息（使用本地图片路径）
+            extracted_info = await self._extract_from_local_images(image_paths)
+            
+            # 6. 验证和清洗数据
+            extracted_info = self._clean_data(extracted_info)
+            
+            # 7. 保存 JSON 到本地（两个位置）
+            parsed_json_path, pdf_json_path = await self._save_json_locally(
+                extracted_info,
+                task["source_filename"],
+                task_id
+            )
+            
+            # 8. 保存结果到 OSS（仅保存 JSON）
+            result_url, result_key = await self._save_result_to_oss(
+                extracted_info,
+                task["oss_object_prefix"],
+                task["source_filename"]
+            )
+            
+            # 9. 更新数据库
+            await update_extraction_result(
+                task_id=task_id,
+                extracted_info=extracted_info,
+                extracted_info_url=result_url,
+                extracted_info_object_key=result_key,
+                page_image_urls=None,  # 不保存图片 URL
+            )
+            
+            logger.info(f"[{task_id}] PDF processing completed successfully")
+            logger.info(f"[{task_id}] JSON saved to: {parsed_json_path} & {pdf_json_path}")
+            
+        except Exception as e:
+            logger.error(f"[{task_id}] Processing failed: {e}", exc_info=True)
+            
+            # 更新状态为 FAILED
+            await update_task_status(
+                task_id,
+                "FAILED",
+                completed_at=datetime.now(),
+                error={
+                    "type": type(e).__name__,
+                    "message": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+            
+            raise
+        finally:
+            # 10. 清理本地临时文件（仅删除图片，保留 PDF 和 JSON）
+            if temp_dir.exists():
+                import shutil
+                # 只删除图片文件，保留 PDF 和 JSON
+                for item in temp_dir.iterdir():
+                    if item.is_file() and item.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                logger.info(f"[{task_id}] Cleaned up temporary image files (kept PDF & JSON)")
+    
+    async def _download_pdf_to_local(self, object_key: str, temp_dir: Path, source_filename: str = None) -> Path:
+        """下载 PDF 文件到本地临时目录
+        
+        Args:
+            object_key: OSS 对象键
+            temp_dir: 临时目录
+            source_filename: 原始文件名（可选，用于保持文件名）
+        """
+        # 使用原始文件名或默认名称
+        filename = source_filename if source_filename else "original.pdf"
+        pdf_path = temp_dir / filename
+        
+        # 下载文件
+        self.storage.bucket.get_object_to_file(object_key, str(pdf_path))
+        
+        logger.info(f"Downloaded PDF to {pdf_path}")
+        return pdf_path
+    
+    async def _convert_pdf_to_images_local(self, pdf_path: Path, temp_dir: Path) -> List[Path]:
+        """转换 PDF 为图片（保存到本地）"""
+        output_dir = temp_dir / "pages"
+        output_dir.mkdir(exist_ok=True)
+        
+        image_paths = self.pdf_pipeline.convert_to_images(pdf_path, output_dir)
+        logger.info(f"Converted PDF to {len(image_paths)} images")
+        return image_paths
+    
+    async def _extract_from_local_images(self, image_paths: List[Path]) -> Dict[str, Any]:
+        """
+        从本地图片提取信息（使用 Qwen VL 多图输入）
+        
+        Args:
+            image_paths: 本地图片路径列表
+            
+        Returns:
+            提取的结构化信息
+        """
+        # 构建多图输入 content
+        content = []
+        
+        # 将本地图片转为 base64 编码
+        import base64
+        for img_path in image_paths:
+            with open(img_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode("utf-8")
+                # 检测图片格式
+                ext = img_path.suffix.lower()
+                mime_type = "image/png" if ext == ".png" else "image/jpeg"
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{img_data}"}
+                })
+        
+        # 添加提示词
+        content.append({"type": "text", "text": self.extraction_prompt})
+        
+        messages = [{"role": "user", "content": content}]
+        
+        try:
+            extra_body = {"enable_thinking": False}
+            if os.getenv("VL_HIGH_RESOLUTION_MODE", "false").lower() == "true":
+                extra_body["vl_high_resolution_images"] = True
+            
+            logger.info(f"Calling Qwen VL with {len(image_paths)} images")
+            
+            completion = self.vl_client.chat.completions.create(
+                model=self.vl_model,
+                messages=messages,
+                extra_body=extra_body,
+                temperature=float(os.getenv("VL_TEMPERATURE", "0.1")),
+                max_tokens=int(os.getenv("VL_MAX_TOKENS", "4096")),
+                response_format={"type": "json_object"}
+            )
+            
+            result = json.loads(completion.choices[0].message.content)
+            logger.info("VL extraction successful")
+            return result
+        except Exception as e:
+            logger.error(f"VL API failed: {e}", exc_info=True)
+            raise
+    
+    def _build_pdf_prefix(self, project_id: str, task_id: str) -> str:
+        """构建 PDF OSS 前缀"""
+        return self.storage.build_object_key(
+            "bronze", "userUploads", project_id, "pdf", task_id
+        )
+    
+    def _clean_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """清洗和标准化数据"""
+        cleaned = data.copy()
+        
+        # 字符串字段去空格
+        string_fields = ["company_name", "industry", "core_product", "core_technology"]
+        for field in string_fields:
+            if field in cleaned and isinstance(cleaned[field], str):
+                cleaned[field] = cleaned[field].strip()
+        
+        # 确保 core_team 是列表
+        if "core_team" not in cleaned or not isinstance(cleaned["core_team"], list):
+            cleaned["core_team"] = []
+        
+        # 确保关键词去重
+        if "keywords" in cleaned and isinstance(cleaned["keywords"], list):
+            cleaned["keywords"] = list(set(cleaned["keywords"]))[:15]
+        
+        return cleaned
+    
+    async def _save_json_locally(
+        self,
+        extracted_info: dict,
+        source_filename: str,
+        task_id: str
+    ) -> tuple[Path, Path]:
+        """保存 JSON 到本地（两个位置）
+        
+        Args:
+            extracted_info: 提取的数据
+            source_filename: 原始文件名
+            task_id: 任务 ID
+            
+        Returns:
+            (parsed 目录路径, uploads/pdf 目录路径)
+        """
+        import json
+        pdf_name = Path(source_filename).stem  # 去除 .pdf 后缀
+        json_filename = f"{pdf_name}_extracted_info.json"
+        
+        # 1. 保存到 parsed/{pdf_name}/auto/ 目录
+        parsed_dir = Path("parsed") / pdf_name / "auto"
+        parsed_dir.mkdir(parents=True, exist_ok=True)
+        parsed_json_path = parsed_dir / json_filename
+        
+        with open(parsed_json_path, "w", encoding="utf-8") as f:
+            json.dump(extracted_info, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Saved JSON to parsed: {parsed_json_path}")
+        
+        # 2. 保存到 uploads/pdf/{task_id}/ 目录（与 PDF 同目录）
+        pdf_temp_dir = Path("uploads") / "pdf" / task_id
+        pdf_temp_dir.mkdir(parents=True, exist_ok=True)
+        pdf_json_path = pdf_temp_dir / json_filename
+        
+        with open(pdf_json_path, "w", encoding="utf-8") as f:
+            json.dump(extracted_info, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Saved JSON to PDF dir: {pdf_json_path}")
+        
+        return parsed_json_path, pdf_json_path
+    
+    async def _save_result_to_oss(
+        self,
+        extracted_info: dict,
+        oss_prefix: str,
+        source_filename: str
+    ) -> tuple[str, str]:
+        """保存提取结果到 OSS"""
+        # 生成文件名: {源文件名}_extracted_info.json
+        filename = Path(source_filename).stem + "_extracted_info.json"
+        object_key = f"{oss_prefix}/{filename}"
+        
+        # 上传 JSON
+        json_content = json.dumps(extracted_info, ensure_ascii=False, indent=2)
+        self.storage.upload_text(
+            json_content,
+            object_key,
+            content_type="application/json"
+        )
+        
+        # 生成 URL
+        url = self.storage.build_public_url(object_key)
+        
+        logger.info(f"Saved extraction result to OSS: {url}")
+        return url, object_key

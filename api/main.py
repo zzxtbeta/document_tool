@@ -183,6 +183,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"📁 Upload directory: {config.UPLOAD_DIR}")
     logger.info(f"📁 Output directory: {config.OUTPUT_DIR}")
     
+    # Start PDF task queue
+    try:
+        from pipelines.async_task_queue import get_task_queue
+        pdf_queue = get_task_queue()
+        await pdf_queue.start()
+        logger.info("✅ PDF extraction queue started")
+    except Exception as e:
+        logger.warning(f"Failed to start PDF queue: {e}")
+    
     # Start cleanup task
     async def cleanup_loop():
         while True:
@@ -196,6 +205,15 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("🛑 Shutting down API")
     cleanup_task.cancel()
+    
+    # Stop PDF task queue
+    try:
+        from pipelines.async_task_queue import get_task_queue
+        pdf_queue = get_task_queue()
+        await pdf_queue.stop()
+        logger.info("✅ PDF extraction queue stopped")
+    except Exception as e:
+        logger.warning(f"Failed to stop PDF queue: {e}")
 
 
 # =============================================================================
@@ -275,6 +293,14 @@ try:
     logger.info("Audio transcription routes registered (short + long)")
 except Exception as e:
     logger.warning(f"Failed to register audio routes: {e}")
+
+# Import and register PDF extraction routes
+try:
+    from api.pdf import pdf_router
+    app.include_router(pdf_router)
+    logger.info("PDF extraction routes registered")
+except Exception as e:
+    logger.warning(f"Failed to register PDF routes: {e}")
 
 
 # =============================================================================
