@@ -95,6 +95,30 @@ class AudioApi {
   }
 
   /**
+   * 列出本地长音频任务
+   */
+  async listLongTasks(params: {
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<{
+    success: boolean;
+    data: LongAudioStatusResponse['data'][];
+    metadata: {
+      total: number;
+      page: number;
+      page_size: number;
+      total_pages: number;
+    };
+  }> {
+    const response = await jsonClient.get(
+      '/api/v1/audio/transcribe-long',
+      { params }
+    );
+    return response.data;
+  }
+
+  /**
    * DashScope 任务列表
    */
   async listDashScopeTasks(params: {

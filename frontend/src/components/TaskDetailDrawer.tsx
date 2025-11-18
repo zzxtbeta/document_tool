@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { useAudioStore } from '../store/useAudioStore';
 import { STATUS_LABEL, STATUS_STYLE } from './taskStatus';
 import { MeetingMinutesCard } from './MeetingMinutesCard';
@@ -18,6 +18,8 @@ export const TaskDetailDrawer = () => {
   const selectTask = useAudioStore((state) => state.selectTask);
   const refreshLongTask = useAudioStore((state) => state.refreshLongTask);
   const cancelDashScopeTask = useAudioStore((state) => state.cancelDashScopeTask);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   if (!selectedTask) return null;
 
@@ -92,6 +94,28 @@ export const TaskDetailDrawer = () => {
             </Section>
           ) : null}
 
+          {selectedTask.remoteResultUrls?.length ? (
+            <Section title="OSS 转写 JSON">
+              <ul className="space-y-2">
+                {selectedTask.remoteResultUrls.map((url, idx) => (
+                  <li key={url}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 text-sm text-primary-700 hover:text-primary-900 underline"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      转写结果 #{idx} (公开访问)
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          ) : null}
+
           {selectedTask.localAudioPaths?.length ? (
             <Section title="本地音频副本">
               <ul className="list-disc pl-4 space-y-1 text-xs break-all">
@@ -130,11 +154,32 @@ export const TaskDetailDrawer = () => {
                 minutesGeneratedAt={selectedTask.minutesGeneratedAt}
                 minutesError={selectedTask.minutesError}
               />
+              {selectedTask.minutesMarkdownSignedUrl && (
+                <div className="mt-3 pt-3 border-t border-primary-100">
+                  <a
+                    href={selectedTask.minutesMarkdownSignedUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 text-sm text-primary-700 hover:text-primary-900 underline"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    下载会议纪要 Markdown
+                  </a>
+                  <p className="text-xs text-primary-500 mt-1">临时下载链接(10分钟内有效)</p>
+                </div>
+              )}
             </Section>
           )}
         </div>
 
         <div className="border-t border-primary-100 px-6 py-4 flex flex-wrap gap-3">
+          {cancelError && (
+            <div className="w-full text-sm text-rose-600 bg-rose-50 px-3 py-2 rounded-lg">
+              {cancelError}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => refreshLongTask(selectedTask.taskId)}
@@ -145,10 +190,25 @@ export const TaskDetailDrawer = () => {
           {selectedTask.status === 'PENDING' && (
             <button
               type="button"
-              onClick={() => cancelDashScopeTask(selectedTask.dashscopeTaskId)}
-              className="px-4 py-2 rounded-lg border border-rose-200 text-sm text-rose-600 hover:bg-rose-50"
+              onClick={async () => {
+                if (isCancelling) return;
+                setCancelError(null);
+                setIsCancelling(true);
+                try {
+                  await cancelDashScopeTask(selectedTask.dashscopeTaskId);
+                  await refreshLongTask(selectedTask.taskId);
+                } catch (error: any) {
+                  const errorMsg = error?.response?.data?.detail || error?.message || '取消失败';
+                  setCancelError(errorMsg);
+                  console.error('取消任务失败:', error);
+                } finally {
+                  setIsCancelling(false);
+                }
+              }}
+              disabled={isCancelling}
+              className="px-4 py-2 rounded-lg border border-rose-200 text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              取消任务
+              {isCancelling ? '取消中...' : '取消任务'}
             </button>
           )}
           <button

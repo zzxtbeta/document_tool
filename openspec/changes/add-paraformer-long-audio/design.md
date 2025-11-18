@@ -79,16 +79,34 @@ DashScope `Transcription` 异步 API 需要先通过 `async_call` 提交任务�
 - DashScope 返回 FAILED 时继续暴露 code/message，用于 UI 告警。
 
 ## 实现步骤
-1. 更新 OpenSpec 文档（spec + tasks + 本设计）。
-2. 扩展 `audio_models.py` 数据结构。
-3. 在 `audio_api.py` 中：
+1. ✅ 更新 OpenSpec 文档（spec + tasks + 本设计）。
+2. ✅ 扩展 `audio_models.py` 数据结构。
+3. ✅ 在 `audio_api.py` 中：
    - 读取 `LONG_AUDIO_RESULT_TTL`，提交任务时写入记录。
    - 状态查询时检查节流条件；更新 `last_fetch_at`。
    - 任务成功时设置 `remote_result_expires_at` 并缓存音频/JSON（已有逻辑）。
    - 在响应 metadata 中返回 `poll_interval_seconds`, `remote_result_expires_at`, `remote_result_ttl_seconds`, `remote_result_expired`。
-4. 运行端到端测试，确保短/长音频响应都包含新的元数据字段且兼容旧客户端。
+4. ✅ 模块解耦与重构：
+   - 将短音频和长音频代码完全分离到独立模块（`api/audio/short/`, `api/audio/long/`）。
+   - 重命名 pipeline 文件以明确区分（`short_audio_pipeline.py`, `long_audio_pipeline.py`）。
+   - 删除旧的耦合代码文件（`audio_api.py`, `audio_models.py`）。
+5. ✅ Bug 修复与优化：
+   - 修复 error 字段类型不匹配问题（JSONB dict → JSON string 序列化）。
+   - 在 `_build_status_data` 中添加 error 字段类型兼容处理。
+   - 添加 `_get_long_audio_task_by_dashscope_id` 函数用于取消任务前的状态检查。
+   - 优化取消任务逻辑：先检查本地状态再调用 DashScope API，避免无效请求。
+   - 前端轮询时静默处理错误，避免干扰用户体验。
+   - TaskHistoryPanel 和 TaskDetailDrawer 中的取消按钮都添加完整错误处理。
+6. ✅ 前端集成：
+   - 添加 OSS 下载链接（JSON + Markdown 签名 URL）。
+   - 实现自动轮询（5秒间隔，仅针对 PENDING/RUNNING 任务）。
+   - 取消按钮只在 PENDING 状态显示，添加 loading 状态和错误提示。
+7. ✅ 运行端到端测试，确保短/长音频响应都包含新的元数据字段且兼容旧客户端。
 
 ## 风险与缓解
-- **风险：** 客户端解析新增字段失败。→ 采用可选字段，不破坏现有字段；更新 API 文档。
-- **风险：** DashScope 时间字符串格式变化。→ `remote_result_expires_at` 使用本地 `datetime.utcnow()` 推算，避免解析失败。
-- **风险：** In-memory TaskStore 导致进程重启丢状态。→ 在文档中强调开发阶段限制，生产需持久化（待后续改进）。
+- **风险：** 客户端解析新增字段失败。→ ✅ 采用可选字段，不破坏现有字段；更新 API 文档。
+- **风险：** DashScope 时间字符串格式变化。→ ✅ `remote_result_expires_at` 使用本地 `datetime.utcnow()` 推算，避免解析失败。
+- **风险：** In-memory TaskStore 导致进程重启丢状态。→ ✅ 已迁移到 PostgreSQL 单表持久化，支持多实例和重启恢复。
+- **风险：** error 字段类型不匹配导致 500 错误。→ ✅ 统一序列化为 JSON 字符串，并在 `_build_status_data` 中处理类型兼容。
+- **风险：** 用户重复点击取消按钮导致后端压力。→ ✅ 添加本地状态检查，只在 PENDING 状态调用 DashScope API；前端添加 loading 状态防止重复点击。
+- **风险：** 轮询时的网络错误影响用户体验。→ ✅ 前端静默处理轮询错误，只在主动操作时显示错误提示。

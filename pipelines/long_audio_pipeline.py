@@ -1,4 +1,4 @@
-"""Paraformer long audio transcription service.
+"""Long Audio Processing Pipeline
 
 Integrates DashScope paraformer-v2 async submission and polling for long audio files.
 """

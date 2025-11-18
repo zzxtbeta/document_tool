@@ -267,11 +267,12 @@ async def add_request_id_and_logging(request: Request, call_next):
 # ROUTERS
 # =============================================================================
 
-# Import and register audio router
+# Import and register audio routers (decoupled short/long modules)
 try:
-    from api.audio_api import router as audio_router
-    app.include_router(audio_router)
-    logger.info("Audio transcription routes registered")
+    from api.audio import short_audio_router, long_audio_router
+    app.include_router(short_audio_router)
+    app.include_router(long_audio_router)
+    logger.info("Audio transcription routes registered (short + long)")
 except Exception as e:
     logger.warning(f"Failed to register audio routes: {e}")
 

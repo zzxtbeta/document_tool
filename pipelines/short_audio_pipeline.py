@@ -1,7 +1,7 @@
 """
-Audio Processing Pipeline
+Short Audio Processing Pipeline
 
-Handles audio transcription using DashScope ASR and meeting minutes generation.
+Handles short audio transcription using DashScope ASR and meeting minutes generation.
 
 Author: AI Assistant
 Date: 2025-11-13
@@ -21,7 +21,8 @@ from pydantic import BaseModel
 # Import models from api module
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from api.audio_models import AudioMetadata, MeetingMinutes, ProcessingStats, AudioProcessingOutput
+from api.audio.shared_models import AudioMetadata, MeetingMinutes, ProcessingStats
+from api.audio.short.models import AudioProcessingOutput
 
 logger = logging.getLogger(__name__)
 

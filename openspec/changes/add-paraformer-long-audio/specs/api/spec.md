@@ -88,5 +88,31 @@
 #### Scenario: 取消排队中的任务
 - **GIVEN** 任务仍处于 `PENDING`
 - **WHEN** 客户端请求 `POST /api/v1/audio/dashscope/tasks/{dashscope_task_id}/cancel`
-- **THEN** 后端 SHALL 调用 DashScope 取消接口, 返回 `request_id`
-- **AND** 若任务非 PENDING, 应返回官方错误信息 `UnsupportedOperation`
+- **THEN** 后端 SHALL 先查询本地数据库检查任务状态
+- **AND** 若任务状态不是 PENDING, 应立即返回 400 错误并提示当前状态，避免调用 DashScope API
+- **AND** 若任务状态为 PENDING, 则调用 DashScope 取消接口, 返回 `request_id`
+- **AND** 若 DashScope 仍返回非 PENDING 错误，应返回友好的中文错误信息 `UnsupportedOperation`
+
+#### Scenario: 模块解耦与代码重构
+- **GIVEN** 系统同时支持短音频和长音频转写
+- **WHEN** 开发者需要独立部署或维护短/长音频模块
+- **THEN** 系统 SHALL 将短音频和长音频代码完全分离到独立模块（`api/audio/short/`, `api/audio/long/`）
+- **AND** Pipeline 文件 SHALL 明确命名以区分功能（`short_audio_pipeline.py`, `long_audio_pipeline.py`）
+- **AND** 共享的数据模型 SHALL 放在 `api/audio/shared_models.py` 中
+- **AND** 旧的耦合代码文件（`audio_api.py`, `audio_models.py`）SHALL 被删除
+
+#### Scenario: 错误字段类型兼容处理
+- **GIVEN** 数据库中 error 字段为 JSONB 类型，可能存储 dict 或 string
+- **WHEN** 构建 API 响应时读取 error 字段
+- **THEN** 系统 SHALL 统一将 dict 类型序列化为 JSON 字符串
+- **AND** Pydantic 模型定义 SHALL 使用 `Optional[str]` 类型
+- **AND** `_build_status_data` 函数 SHALL 处理两种输入类型（dict/str）的兼容转换
+
+#### Scenario: 防止重复取消请求
+- **GIVEN** 用户可能在短时间内多次点击取消按钮
+- **WHEN** 收到取消任务请求
+- **THEN** 后端 SHALL 先从本地数据库查询任务当前状态
+- **AND** 只有当状态为 PENDING 时才调用 DashScope 取消 API
+- **AND** 若状态不是 PENDING, SHALL 立即返回包含当前状态的友好错误信息
+- **AND** 前端 SHALL 在取消按钮上添加 loading 状态，防止重复点击
+- **AND** 前端 SHALL 只在任务状态为 PENDING 时显示取消按钮

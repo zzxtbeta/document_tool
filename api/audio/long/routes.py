@@ -1,64 +1,52 @@
 """
-Audio Transcription API Routes
+Long Audio API Routes
 
-FastAPI routes for audio upload, transcription, and meeting minutes generation.
+FastAPI routes for long-audio transcription using DashScope paraformer.
+Supports asynchronous processing, OSS storage, and meeting minutes generation.
 
 Author: AI Assistant
-Date: 2025-11-13
+Date: 2025-11-18
 """
 
 import os
-import uuid
-import logging
-import shutil
-import asyncio
-import json
 import re
+import uuid
+import json
+import logging
+import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi import Query
+import httpx
+from fastapi import APIRouter, HTTPException, Query
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
-from api.audio_models import (
-    AudioTranscriptionResponse,
-    AudioTranscriptionMarkdownResponse,
-    AudioTranscriptionOptions,
-    AsyncTaskResponse,
+from api.audio.long.models import (
     LongAudioTranscriptionRequest,
     LongAudioSubmissionResponse,
     LongAudioTaskInfo,
     LongAudioStatusResponse,
     LongAudioStatusData,
+    LongAudioTaskListResponse,
     DashScopeTaskFetchResponse,
     DashScopeTaskListResponse,
     DashScopeTaskCancelResponse,
 )
-from pipelines.audio_pipeline import AudioPipeline
-from pipelines.paraformer_long_audio import ParaformerLongAudioService
+from api.audio.shared_models import MeetingMinutes
+from pipelines.long_audio_pipeline import ParaformerLongAudioService
 from pipelines.meeting_minutes_service import MeetingMinutesService
 from pipelines.storage import OSSStorageClient
-import httpx
-from psycopg.rows import dict_row
-from psycopg.types.json import Json
-
 from db.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 # Create router
-router = APIRouter(prefix="/api/v1/audio", tags=["audio"])
+router = APIRouter(prefix="/api/v1/audio", tags=["long-audio"])
 
-# Initialize pipeline
-try:
-    audio_pipeline = AudioPipeline()
-except Exception as e:
-    logger.error(f"Failed to initialize AudioPipeline: {e}")
-    audio_pipeline = None
-
+# Initialize services
 try:
     paraformer_service = ParaformerLongAudioService()
 except Exception as e:
@@ -71,24 +59,22 @@ except Exception as e:
     logger.error(f"Failed to initialize MeetingMinutesService: {e}")
     meeting_minutes_service = None
 
+try:
+    storage_client = OSSStorageClient()
+except Exception as exc:
+    logger.warning("OSS storage disabled: %s", exc)
+    storage_client = None
+
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-MAX_FILE_SIZE_MB = int(os.getenv("AUDIO_MAX_FILE_SIZE", "100"))  # 100MB default
-MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
-ASYNC_THRESHOLD_SECONDS = int(os.getenv("AUDIO_ASYNC_THRESHOLD", "600"))  # 10 minutes
-AUDIO_STORAGE_PATH = Path(os.getenv("AUDIO_STORAGE_DIR", "uploads/audios"))
-AUDIO_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-SHORT_AUDIO_STORAGE_PATH = AUDIO_STORAGE_PATH / "short"
-SHORT_AUDIO_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-
 LONG_AUDIO_ALLOWED_SCHEMES = {"http", "https", "oss"}
 _long_storage_env = os.getenv("LONG_AUDIO_STORAGE_DIR") or os.getenv("LONG_AUDIO_STORAGE")
-LONG_AUDIO_RESULTS_DIR = Path(_long_storage_env or (AUDIO_STORAGE_PATH / "long"))
+LONG_AUDIO_RESULTS_DIR = Path(_long_storage_env or "uploads/audios/long")
 LONG_AUDIO_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-LONG_AUDIO_RESULT_TTL = int(os.getenv("LONG_AUDIO_RESULT_TTL", str(24 * 3600)))  # seconds
+LONG_AUDIO_RESULT_TTL = int(os.getenv("LONG_AUDIO_RESULT_TTL", str(24 * 3600)))
 DASHSCOPE_TASK_API_BASE = os.getenv("DASHSCOPE_TASK_API_BASE", "https://dashscope.aliyuncs.com/api/v1/tasks")
 DASHSCOPE_HTTP_TIMEOUT = float(os.getenv("DASHSCOPE_HTTP_TIMEOUT", "30"))
 DEFAULT_AUDIO_USER_ID = os.getenv("DEFAULT_AUDIO_USER_ID", "admin123")
@@ -100,105 +86,10 @@ LONG_AUDIO_TASKS_TABLE = os.getenv("LONG_AUDIO_TASKS_TABLE", "long_audio_tasks")
 _long_audio_table_ready = False
 _long_audio_table_lock = asyncio.Lock()
 
-try:
-    storage_client = OSSStorageClient()
-except Exception as exc:
-    logger.warning("OSS storage disabled: %s", exc)
-    storage_client = None
-
 
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-
-def should_process_async(file_size_mb: float) -> bool:
-    """
-    Determine if audio should be processed asynchronously.
-    
-    Args:
-        file_size_mb: File size in MB
-        
-    Returns:
-        True if should process async, False otherwise
-    """
-    # Estimate: 1MB ≈ 60 seconds of audio
-    estimated_duration = file_size_mb * 60
-    
-    return estimated_duration >= ASYNC_THRESHOLD_SECONDS
-
-
-def save_uploaded_file(upload_file: UploadFile, task_id: str, output_dir: str = None, kind: str = "short") -> Path:
-    """
-    Save uploaded audio file to disk.
-    
-    Args:
-        upload_file: FastAPI UploadFile object
-        task_id: Unique task identifier
-        output_dir: Custom output directory (optional)
-        
-    Returns:
-        Path to saved file
-    """
-    # Validate and resolve output directory
-    if output_dir:
-        # Security check: prevent path traversal
-        if '..' in output_dir or output_dir.startswith('/'):
-            raise ValueError("Invalid output_dir: path traversal not allowed")
-        base_dir = Path(output_dir).resolve()
-        task_dir = base_dir / task_id
-    else:
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        dir_name = f"{timestamp}_{kind}_{task_id}"
-        base_dir = SHORT_AUDIO_STORAGE_PATH if kind == "short" else AUDIO_STORAGE_PATH / kind
-        base_dir.mkdir(parents=True, exist_ok=True)
-        task_dir = base_dir / dir_name
-    task_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Determine file extension
-    filename = upload_file.filename or "audio"
-    ext = Path(filename).suffix or ".m4a"
-    
-    # Save file
-    file_path = task_dir / f"audio_original{ext}"
-    
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(upload_file.file, f)
-    
-    logger.info(f"Saved uploaded file: {file_path}")
-    return file_path
-
-
-def _resolve_short_task_dir(task_id: str) -> Path:
-    """Locate the storage directory for a short-audio task."""
-    legacy_dir = AUDIO_STORAGE_PATH / task_id
-    if legacy_dir.exists():
-        return legacy_dir
-    short_matches = list(SHORT_AUDIO_STORAGE_PATH.glob(f"*_{task_id}"))
-    if short_matches:
-        return short_matches[0]
-    matches = list(AUDIO_STORAGE_PATH.glob(f"*_{task_id}"))
-    if matches:
-        return matches[0]
-    raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-
-
-def _persist_short_result(storage_dir: Path, result: Any) -> Path:
-    """Save short-audio processing result as JSON for auditing."""
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    json_path = storage_dir / "result.json"
-    try:
-        payload = result.model_dump()
-    except AttributeError:
-        try:
-            payload = json.loads(result.json())
-        except Exception:
-            payload = getattr(result, "__dict__", {})
-    json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    return json_path
-
 
 def _get_dashscope_api_key() -> str:
     api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -282,6 +173,7 @@ async def _ensure_long_audio_table():
         create_idx_status = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_status ON {LONG_AUDIO_TASKS_TABLE}(task_status)"
         create_idx_dashscope = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_dashscope ON {LONG_AUDIO_TASKS_TABLE}(dashscope_task_id)"
         create_idx_submitted = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_submitted_at ON {LONG_AUDIO_TASKS_TABLE}(submitted_at DESC)"
+        
         alter_columns = [
             "transcription_text TEXT",
             "meeting_minutes JSONB",
@@ -297,6 +189,7 @@ async def _ensure_long_audio_table():
             "source_filename TEXT",
             "oss_object_prefix TEXT"
         ]
+        
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(create_table_sql)
@@ -308,9 +201,11 @@ async def _ensure_long_audio_table():
         _long_audio_table_ready = True
 
 
-def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+def _parse_iso_datetime(value: Optional[str | datetime]) -> Optional[datetime]:
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value
     try:
         return datetime.fromisoformat(value)
     except ValueError:
@@ -410,73 +305,89 @@ def _record_to_db_params(record: Dict[str, Any]) -> Dict[str, Any]:
 async def _get_long_audio_task(task_id: str) -> Optional[Dict[str, Any]]:
     await _ensure_long_audio_table()
     pool = await DatabaseManager.get_pool()
-    try:
-        async with pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    f"SELECT * FROM {LONG_AUDIO_TASKS_TABLE} WHERE task_id = %s",
-                    (task_id,),
-                )
-                row = await cur.fetchone()
-    except Exception as exc:
-        logger.error("Failed to load long audio task %s: %s", task_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to load task status") from exc
-
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"SELECT * FROM {LONG_AUDIO_TASKS_TABLE} WHERE task_id = %s",
+                (task_id,)
+            )
+            row = await cur.fetchone()
     if not row:
         return None
     return _row_to_long_audio_record(row)
 
 
-async def _upsert_long_audio_task(record: Dict[str, Any]):
+async def _get_long_audio_task_by_dashscope_id(dashscope_task_id: str) -> Optional[Dict[str, Any]]:
+    """Query long audio task by DashScope task ID."""
     await _ensure_long_audio_table()
     pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"SELECT * FROM {LONG_AUDIO_TASKS_TABLE} WHERE dashscope_task_id = %s",
+                (dashscope_task_id,)
+            )
+            row = await cur.fetchone()
+    if not row:
+        return None
+    return _row_to_long_audio_record(row)
+
+
+async def _list_long_audio_tasks(
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+) -> tuple[List[Dict[str, Any]], int]:
+    """Query local long audio tasks with optional filters."""
+    await _ensure_long_audio_table()
+    pool = await DatabaseManager.get_pool()
+    
+    where_clause = ""
+    params = []
+    if status and status != "ALL":
+        where_clause = "WHERE task_status = %s"
+        params.append(status)
+    
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            # Get total count
+            count_sql = f"SELECT COUNT(*) as total FROM {LONG_AUDIO_TASKS_TABLE} {where_clause}"
+            await cur.execute(count_sql, params)
+            count_row = await cur.fetchone()
+            total = count_row["total"] if count_row else 0
+            
+            # Get tasks ordered by submitted_at descending
+            query_sql = f"""
+                SELECT * FROM {LONG_AUDIO_TASKS_TABLE}
+                {where_clause}
+                ORDER BY submitted_at DESC NULLS LAST
+                LIMIT %s OFFSET %s
+            """
+            await cur.execute(query_sql, params + [limit, offset])
+            rows = await cur.fetchall()
+    
+    tasks = [_row_to_long_audio_record(row) for row in rows]
+    return tasks, total
+
+
+async def _upsert_long_audio_task(record: Dict[str, Any]):
+    await _ensure_long_audio_table()
     params = _record_to_db_params(record)
-    columns = [
-        "task_id",
-        "dashscope_task_id",
-        "task_status",
-        "model",
-        "file_urls",
-        "language_hints",
-        "results",
-        "local_result_paths",
-        "remote_result_urls",
-        "remote_result_object_keys",
-        "local_audio_paths",
-        "local_dir",
-        "remote_result_ttl_seconds",
-        "remote_result_expires_at",
-        "last_fetch_at",
-        "submitted_at",
-        "updated_at",
-        "error",
-        "transcription_text",
-        "meeting_minutes",
-        "minutes_markdown_path",
-        "minutes_markdown_url",
-        "minutes_markdown_object_key",
-        "minutes_generated_at",
-        "minutes_error",
-        "user_id",
-        "project_id",
-        "source_filename",
-        "oss_object_prefix",
-    ]
-    placeholders = ", ".join(["%s"] * len(columns))
-    update_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in columns[1:]])
-    query = f"""
-        INSERT INTO {LONG_AUDIO_TASKS_TABLE} ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (task_id) DO UPDATE SET {update_clause}
+    pool = await DatabaseManager.get_pool()
+    
+    columns = list(params.keys())
+    placeholders = ", ".join([f"%({col})s" for col in columns])
+    updates = ", ".join([f"{col} = EXCLUDED.{col}" for col in columns if col != "task_id"])
+    
+    upsert_sql = f"""
+    INSERT INTO {LONG_AUDIO_TASKS_TABLE} ({", ".join(columns)})
+    VALUES ({placeholders})
+    ON CONFLICT (task_id) DO UPDATE SET {updates}
     """
-    values = [params[col] for col in columns]
-    try:
-        async with pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, values)
-    except Exception as exc:
-        logger.error("Failed to persist long audio task %s: %s", record.get("task_id"), exc)
-        raise HTTPException(status_code=500, detail="Failed to persist task state") from exc
+    
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(upsert_sql, params)
 
 
 async def _store_long_audio_task(task_id: str, data: Dict[str, Any]):
@@ -498,6 +409,13 @@ def _validate_long_audio_urls(urls: List[str]):
 
 
 def _build_status_data(record: Dict[str, Any], minutes_signed_url: Optional[str] = None) -> LongAudioStatusData:
+    # Handle error field - convert dict to JSON string if needed
+    error_value = record.get("error")
+    if isinstance(error_value, dict):
+        error_str = json.dumps(error_value, ensure_ascii=False)
+    else:
+        error_str = error_value
+    
     return LongAudioStatusData(
         task_id=record["task_id"],
         dashscope_task_id=record["dashscope_task_id"],
@@ -514,7 +432,7 @@ def _build_status_data(record: Dict[str, Any], minutes_signed_url: Optional[str]
         local_dir=record.get("local_dir"),
         remote_result_ttl_seconds=record.get("remote_result_ttl_seconds"),
         remote_result_expires_at=record.get("remote_result_expires_at"),
-        error=record.get("error"),
+        error=error_str,
         transcription_text=record.get("transcription_text"),
         meeting_minutes=record.get("meeting_minutes"),
         minutes_markdown_path=record.get("minutes_markdown_path"),
@@ -529,322 +447,150 @@ def _build_status_data(record: Dict[str, Any], minutes_signed_url: Optional[str]
     )
 
 
-def _extract_transcription_text(results: Optional[List[Dict[str, Any]]]) -> Optional[str]:
-    if not results:
+def _extract_transcription_text(data: Dict[str, Any]) -> Optional[str]:
+    """Extract text from cached DashScope JSON file."""
+    if not data or not isinstance(data, dict):
         return None
+    
+    # DashScope paraformer JSON structure: {"transcripts": [{"text": "...", "sentences": [...]}]}
+    transcripts = data.get("transcripts")
+    if not isinstance(transcripts, list):
+        return None
+    
     fragments: List[str] = []
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        transcripts = result.get("transcripts")
-        if isinstance(transcripts, list):
-            for entry in transcripts:
-                if isinstance(entry, dict):
-                    text = entry.get("text")
-                    if text:
-                        fragments.append(text.strip())
-        text = result.get("transcript") or result.get("text")
-        if text:
-            fragments.append(str(text).strip())
+    for transcript_entry in transcripts:
+        if isinstance(transcript_entry, dict):
+            text = transcript_entry.get("text")
+            if text:
+                fragments.append(text.strip())
+    
     combined = "\n\n".join(filter(None, fragments)).strip()
     return combined or None
 
 
 def _load_transcription_from_cached_results(paths: Optional[List[str]]) -> Optional[str]:
+    """Load transcription text from cached JSON files."""
     if not paths:
         return None
+    
     for path_str in paths:
         if not path_str:
             continue
+        
         try:
-            path = Path(path_str)
-        except TypeError:
-            continue
-        if not path.exists():
-            logger.warning("Cached transcription missing: %s", path)
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            p = Path(path_str)
+            if not p.exists():
+                continue
+            
+            data = json.loads(p.read_text(encoding="utf-8"))
+            text = _extract_transcription_text(data)
+            if text:
+                logger.info("Loaded transcription from %s: %d chars", path_str, len(text))
+                return text
         except Exception as exc:
-            logger.warning("Failed to parse cached transcription %s: %s", path, exc)
-            continue
-        text = _extract_transcription_text([payload])
-        if text:
-            return text
+            logger.warning("Failed to load transcription from %s: %s", path_str, exc)
+    
     return None
 
 
 def _maybe_upload_minutes_to_oss(record: Dict[str, Any]) -> Dict[str, Any]:
-    if storage_client is None:
+    if not storage_client:
         return record
-    object_prefix = record.get("oss_object_prefix")
-    markdown_path = record.get("minutes_markdown_path")
-    if not object_prefix or not markdown_path:
+    
+    md_path = record.get("minutes_markdown_path")
+    if not md_path or not Path(md_path).exists():
         return record
-    path = Path(markdown_path)
-    if not path.exists():
-        logger.warning("Markdown path missing for task %s: %s", record.get("task_id"), markdown_path)
+    
+    if record.get("minutes_markdown_url"):
         return record
-    safe_base = _sanitize_filename_component(record.get("source_filename") or record.get("task_id", "audio"), record.get("task_id", "audio"))
-    object_key = f"{object_prefix.rstrip('/')}/{safe_base}纪要.md"
+    
     try:
-        storage_client.upload_file(path, object_key, content_type="text/markdown; charset=utf-8")
+        project_id = record.get("project_id") or DEFAULT_AUDIO_PROJECT_ID
+        task_id = record.get("task_id")
+        source_filename = record.get("source_filename") or "minutes"
+        base_name = Path(source_filename).stem
+        
+        object_key = storage_client.build_object_key(
+            "bronze", "userUploads", project_id, "audio", task_id, f"{base_name}_minutes.md"
+        )
+        
+        storage_client.upload_file(Path(md_path), object_key, content_type="text/markdown")
+        public_url = storage_client.build_public_url(object_key)
+        
+        record["minutes_markdown_url"] = public_url
         record["minutes_markdown_object_key"] = object_key
-        record["minutes_markdown_url"] = storage_client.build_public_url(object_key)
-        record["minutes_error"] = None
+        logger.info("Uploaded minutes to OSS: %s", object_key)
     except Exception as exc:
-        logger.error("Failed to upload meeting minutes for %s: %s", record.get("task_id"), exc)
+        logger.error("Failed to upload minutes to OSS: %s", exc)
         record["minutes_error"] = f"OSS upload failed: {exc}"
+    
     return record
 
 
 def _build_minutes_signed_url(record: Dict[str, Any]) -> Optional[str]:
-    if storage_client is None:
+    if not storage_client:
         return None
+    
     object_key = record.get("minutes_markdown_object_key")
     if not object_key:
         return None
+    
     try:
         return storage_client.generate_signed_url(object_key, expires=OSS_SIGNED_URL_TTL)
     except Exception as exc:
-        logger.warning("Failed to sign minutes URL for %s: %s", record.get("task_id"), exc)
+        logger.warning("Failed to generate signed URL: %s", exc)
         return None
 
 
 async def _maybe_generate_meeting_minutes(record: Dict[str, Any]) -> Dict[str, Any]:
-    if meeting_minutes_service is None:
-        return record
     if record.get("meeting_minutes"):
-        if not record.get("minutes_markdown_url"):
-            record = _maybe_upload_minutes_to_oss(record)
         return record
-    if record.get("minutes_error"):
+    
+    if not meeting_minutes_service:
+        record["minutes_error"] = "Meeting minutes service not available"
         return record
-    transcription_text = record.get("transcription_text")
-    if not transcription_text:
-        if not record.get("local_result_paths") and record.get("results") and paraformer_service is not None:
-            task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
-            task_dir.mkdir(parents=True, exist_ok=True)
-            record["local_dir"] = str(task_dir)
-            record["local_result_paths"] = paraformer_service.cache_transcriptions(task_dir, record.get("results"))
-        transcription_text = _load_transcription_from_cached_results(record.get("local_result_paths"))
-        if transcription_text:
-            record["transcription_text"] = transcription_text
-    if not transcription_text:
+    
+    # Load transcription from cached JSON files (DashScope API doesn't return full text)
+    transcription = record.get("transcription_text")
+    if not transcription and record.get("local_result_paths"):
+        transcription = _load_transcription_from_cached_results(record.get("local_result_paths"))
+        if transcription:
+            record["transcription_text"] = transcription
+    
+    if not transcription:
+        record["minutes_error"] = "No transcription available"
+        logger.warning("No transcription found for task %s (cached_files=%s)", 
+                      record.get("task_id"), 
+                      bool(record.get("local_result_paths")))
         return record
+    
     try:
-        minutes = meeting_minutes_service.generate_minutes(transcription_text)
+        minutes = meeting_minutes_service.generate_minutes(transcription)
         record["meeting_minutes"] = minutes.model_dump(mode="json")
         record["minutes_generated_at"] = datetime.now(timezone.utc).isoformat()
-        task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
-        task_dir.mkdir(parents=True, exist_ok=True)
-        markdown_path = task_dir / "meeting_minutes.md"
-        meeting_minutes_service.save_as_markdown(minutes, markdown_path, transcript=transcription_text)
-        record["minutes_markdown_path"] = str(markdown_path)
-        record["minutes_error"] = None
+        
+        local_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["task_id"])
+        local_dir.mkdir(parents=True, exist_ok=True)
+        
+        source_filename = record.get("source_filename") or "minutes"
+        md_filename = f"{Path(source_filename).stem}_minutes.md"
+        md_path = local_dir / md_filename
+        
+        meeting_minutes_service.save_as_markdown(minutes, md_path, transcription)
+        record["minutes_markdown_path"] = str(md_path)
+        
         record = _maybe_upload_minutes_to_oss(record)
+        logger.info("Generated meeting minutes for task %s", record["task_id"])
     except Exception as exc:
-        logger.error("Meeting minutes generation failed for %s: %s", record.get("task_id"), exc)
+        logger.error("Failed to generate meeting minutes: %s", exc)
         record["minutes_error"] = str(exc)
+    
     return record
 
 
 # =============================================================================
 # API ENDPOINTS
 # =============================================================================
-
-@router.post("/transcribe")
-async def transcribe_audio(
-    file: UploadFile = File(..., description="Audio file to transcribe"),
-    output_format: str = Form("json", description="Output format: 'json' or 'markdown'"),
-    output_dir: Optional[str] = Form(None, description="Custom output directory (optional)"),
-    enable_itn: bool = Form(True, description="Enable inverse text normalization"),
-    asr_context: Optional[str] = Form(None, description="ASR context for specialized terminology"),
-    language: Optional[str] = Form(None, description="Audio language code (e.g., 'zh', 'en')")
-):
-    """
-    Transcribe audio file and generate meeting minutes.
-    
-    Supports formats: m4a, mp3, wav, flac, opus, aac
-    
-    **Output Formats:**
-    - `json` (default): Returns structured JSON with meeting_minutes object
-    - `markdown`: Returns Markdown formatted content and saves .md file
-    
-    **Parameters:**
-    - `file`: Audio file to upload (max 100MB)
-    - `output_format`: 'json' or 'markdown' (default: 'json')
-    - `output_dir`: Custom output directory, relative path (default: 'uploads/audios')
-    - `enable_itn`: Enable inverse text normalization in ASR (default: true)
-    - `asr_context`: Custom context for ASR to improve recognition of specialized terms
-      Example: "This discussion involves medical terms like CT scan, MRI, blood test"
-    - `language`: Specify audio language ('zh', 'en', 'ja', 'ko', etc.) to improve accuracy
-      If not specified, language will be auto-detected
-    
-    **Response:**
-    - For `json` format: Returns AudioTranscriptionResponse with structured data
-    - For `markdown` format: Returns markdown_content, file path, and download URL
-    
-    Args:
-        file: Audio file upload
-        output_format: Output format ('json' or 'markdown')
-        output_dir: Custom output directory
-        enable_itn: Enable inverse text normalization in ASR
-        asr_context: ASR context for specialized terminology
-        language: Audio language code
-        
-    Returns:
-        AudioTranscriptionResponse (json) or AudioTranscriptionMarkdownResponse (markdown)
-    """
-    # Check if pipeline is initialized
-    if audio_pipeline is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Audio processing service is not available. Check DASHSCOPE_API_KEY."
-        )
-    
-    # Validate output_format
-    if output_format not in ["json", "markdown"]:
-        raise HTTPException(
-            status_code=400,
-            detail="output_format must be 'json' or 'markdown'"
-        )
-    
-    # Generate task ID
-    task_id = str(uuid.uuid4())
-    request_time = datetime.now()
-    
-    try:
-        # Validate file size
-        file.file.seek(0, 2)  # Seek to end
-        file_size = file.file.tell()
-        file.file.seek(0)  # Reset to start
-        
-        file_size_mb = file_size / (1024 * 1024)
-        
-        if file_size > MAX_FILE_SIZE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Maximum size: {MAX_FILE_SIZE_MB}MB"
-            )
-        
-        # Validate file format
-        filename = file.filename or ""
-        ext = Path(filename).suffix.lstrip('.').lower()
-        supported_formats = ['m4a', 'mp3', 'wav', 'flac', 'opus', 'aac']
-        
-        if ext not in supported_formats:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file format: {ext}. Supported: {', '.join(supported_formats)}"
-            )
-        
-        logger.info(f"Processing audio upload: {filename} ({file_size_mb:.2f}MB), format: {output_format}")
-        
-        # Check if should process async
-        if should_process_async(file_size_mb):
-            logger.warning(f"Large file detected ({file_size_mb:.2f}MB), but async processing not yet implemented")
-        
-        # Save uploaded file
-        try:
-            file_path = save_uploaded_file(file, task_id, output_dir)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        storage_dir = file_path.parent
-        result_json_path: Optional[Path] = None
-
-        # Process audio
-        try:
-            result = audio_pipeline.process(
-                str(file_path), 
-                enable_itn=enable_itn,
-                asr_context=asr_context,
-                language=language
-            )
-            result_json_path = _persist_short_result(storage_dir, result)
-            
-            # Build response based on output_format
-            if output_format == "markdown":
-                # Save as Markdown file
-                md_filename = f"{Path(filename).stem}_minutes.md"
-                md_path = file_path.parent / md_filename
-                
-                audio_pipeline.save_as_markdown(
-                    meeting_minutes=result.meeting_minutes,
-                    output_path=md_path,
-                    transcript=result.transcription_text
-                )
-                
-                # Read Markdown content
-                markdown_content = md_path.read_text(encoding='utf-8')
-                
-                # Build Markdown response
-                response = AudioTranscriptionMarkdownResponse(
-                    success=True,
-                    transcript=result.transcription_text,
-                    markdown_content=markdown_content,
-                    markdown_file_path=str(md_path),
-                    download_url=f"/api/v1/audio/download/{task_id}",
-                    processing_stats=result.processing_stats,
-                    audio_metadata=result.audio_metadata,
-                    error=None,
-                    metadata={
-                        "task_id": task_id,
-                        "timestamp": request_time.isoformat(),
-                        "filename": filename,
-                        "file_size_mb": round(file_size_mb, 2),
-                        "processing_time": result.processing_stats.total_time,
-                        "output_format": "markdown",
-                        "local_dir": str(storage_dir),
-                        "local_audio_path": str(file_path),
-                        "local_markdown_path": str(md_path),
-                        "local_result_json": str(result_json_path) if result_json_path else None
-                    }
-                )
-                
-                logger.info(f"Audio processing successful (Markdown): {task_id}")
-                return response
-            
-            else:  # json format (default)
-                # Build JSON response (backward compatible)
-                response = AudioTranscriptionResponse(
-                    success=True,
-                    data=result,
-                    error=None,
-                    metadata={
-                        "task_id": task_id,
-                        "timestamp": request_time.isoformat(),
-                        "filename": filename,
-                        "file_size_mb": round(file_size_mb, 2),
-                        "processing_time": result.processing_stats.total_time,
-                        "output_format": "json",
-                        "local_dir": str(storage_dir),
-                        "local_audio_path": str(file_path),
-                        "local_result_json": str(result_json_path) if result_json_path else None
-                    }
-                )
-                
-                logger.info(f"Audio processing successful (JSON): {task_id}")
-                return response
-            
-        except Exception as e:
-            logger.error(f"Audio processing failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Audio processing failed: {str(e)}"
-            )
-        
-        finally:
-            # Keep files for now (can implement cleanup later)
-            pass
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
 
 @router.post("/transcribe-long", response_model=LongAudioSubmissionResponse)
 async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest):
@@ -854,16 +600,16 @@ async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest
             status_code=503,
             detail="Paraformer service is not available. Check DASHSCOPE_API_KEY."
         )
-
+    
     file_urls = [str(url) for url in request.file_urls]
     _validate_long_audio_urls(file_urls)
-
+    
     if request.model == "paraformer-8k-v2" and request.language_hints:
         raise HTTPException(
             status_code=400,
             detail="language_hints is only supported by paraformer-v2"
         )
-
+    
     try:
         submission = paraformer_service.submit(
             file_urls=file_urls,
@@ -875,18 +621,22 @@ async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest
     except RuntimeError as exc:
         logger.error("Paraformer submission failed: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-
+    
     task_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    dashscope_task_id = submission["task_id"]
+    
     user_id = request.user_id or DEFAULT_AUDIO_USER_ID
     project_id = request.project_id or DEFAULT_AUDIO_PROJECT_ID
     source_filename = request.source_filename or _derive_source_filename(file_urls)
+    
     oss_object_prefix = None
     if storage_client is not None:
         oss_object_prefix = storage_client.build_audio_prefix(project_id, task_id)
+    
+    now = datetime.now(timezone.utc).isoformat()
     record = {
         "task_id": task_id,
-        "dashscope_task_id": submission["task_id"],
+        "dashscope_task_id": dashscope_task_id,
         "task_status": submission["task_status"],
         "model": request.model,
         "file_urls": file_urls,
@@ -908,14 +658,15 @@ async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest
         "source_filename": source_filename,
         "oss_object_prefix": oss_object_prefix,
     }
+    
     await _store_long_audio_task(task_id, record)
-
-    response = LongAudioSubmissionResponse(
+    
+    return LongAudioSubmissionResponse(
         success=True,
         data=LongAudioTaskInfo(
             task_id=task_id,
-            dashscope_task_id=submission["task_id"],
-            task_status=submission["task_status"],
+            dashscope_task_id=dashscope_task_id,
+            task_status=record["task_status"],
             model=request.model,
         ),
         metadata={
@@ -923,25 +674,49 @@ async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest
         }
     )
 
-    return response
+
+@router.get("/transcribe-long", response_model=LongAudioTaskListResponse)
+async def list_long_audio_tasks(
+    status: Optional[str] = Query(None, description="Filter by task status (PENDING/RUNNING/SUCCEEDED/FAILED/ALL)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+):
+    """List local long audio transcription tasks."""
+    offset = (page - 1) * page_size
+    tasks, total = await _list_long_audio_tasks(status=status, limit=page_size, offset=offset)
+    
+    # Build status data for each task
+    task_data = []
+    for record in tasks:
+        task_data.append(_build_status_data(record))
+    
+    return LongAudioTaskListResponse(
+        success=True,
+        data=task_data,
+        metadata={
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 0,
+        }
+    )
 
 
 @router.get("/transcribe-long/{task_id}", response_model=LongAudioStatusResponse)
 async def get_long_audio_status(task_id: str):
-    """Fetch long audio transcription status (polls DashScope when needed)."""
+    """Query long audio transcription task status."""
     if paraformer_service is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Paraformer service is not available. Check DASHSCOPE_API_KEY."
-        )
-
+        raise HTTPException(status_code=503, detail="Paraformer service unavailable")
+    
     record = await _get_long_audio_task(task_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
+    
     now_dt = datetime.now(timezone.utc)
+    current_status = record.get("task_status")
     poll_interval = getattr(paraformer_service, "poll_interval", 10)
-    should_fetch = record["task_status"] not in PARAFORMER_FINAL_STATUSES
+    should_fetch = current_status not in PARAFORMER_FINAL_STATUSES
+    
     last_fetch_iso = record.get("last_fetch_at")
     last_fetch_dt: Optional[datetime] = None
     if last_fetch_iso:
@@ -949,7 +724,7 @@ async def get_long_audio_status(task_id: str):
             last_fetch_dt = datetime.fromisoformat(last_fetch_iso)
         except ValueError:
             last_fetch_dt = None
-
+    
     try:
         if should_fetch:
             throttle_seconds = (now_dt - last_fetch_dt).total_seconds() if last_fetch_dt else None
@@ -958,20 +733,28 @@ async def get_long_audio_status(task_id: str):
                 record["last_fetch_at"] = now_dt.isoformat()
                 record["task_status"] = dashscope_data["task_status"]
                 record["results"] = dashscope_data.get("results")
-                record["updated_at"] = datetime.now(timezone.utc).isoformat()
-
+                record["updated_at"] = now_dt.isoformat()
+                
                 if record["task_status"] == "SUCCEEDED" and record["results"]:
+                    # Setup task directory
                     task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
                     task_dir.mkdir(parents=True, exist_ok=True)
                     record["local_dir"] = str(task_dir)
+                    
+                    # Cache transcriptions
                     record["local_result_paths"] = paraformer_service.cache_transcriptions(task_dir, record["results"])
+                    
+                    # Download audio files
                     record["local_audio_paths"] = paraformer_service.download_audio(task_dir, record["file_urls"])
+                    
+                    # Upload to OSS if available
                     if storage_client is not None and record.get("local_result_paths"):
                         uploaded_urls: List[str] = []
                         uploaded_keys: List[str] = []
                         base_prefix = record.get("oss_object_prefix")
                         source_filename = record.get("source_filename") or record["dashscope_task_id"]
                         safe_base = _sanitize_filename_component(source_filename, record["dashscope_task_id"])
+                        
                         for idx, path_str in enumerate(record["local_result_paths"]):
                             try:
                                 path = Path(path_str)
@@ -979,6 +762,7 @@ async def get_long_audio_status(task_id: str):
                                 continue
                             if not path.exists() or not base_prefix:
                                 continue
+                            
                             object_key = f"{base_prefix.rstrip('/')}/{safe_base}_result_{idx}.json"
                             try:
                                 storage_client.upload_file(path, object_key, content_type="application/json")
@@ -986,30 +770,41 @@ async def get_long_audio_status(task_id: str):
                                 uploaded_urls.append(storage_client.build_public_url(object_key))
                             except Exception as exc:
                                 logger.warning("Failed to upload transcription JSON %s: %s", path, exc)
+                        
                         if uploaded_urls:
                             record["remote_result_urls"] = uploaded_urls
                             record["remote_result_object_keys"] = uploaded_keys
+                    
+                    # Set TTL
                     ttl_seconds = record.get("remote_result_ttl_seconds") or LONG_AUDIO_RESULT_TTL
                     record["remote_result_ttl_seconds"] = ttl_seconds
                     record["remote_result_expires_at"] = (now_dt + timedelta(seconds=ttl_seconds)).isoformat()
-                    if not record.get("transcription_text"):
-                        record["transcription_text"] = _extract_transcription_text(record["results"])
+                    
+                    # Extract transcription text from cached JSON files
+                    if not record.get("transcription_text") and record.get("local_result_paths"):
+                        record["transcription_text"] = _load_transcription_from_cached_results(record["local_result_paths"])
+                
                 elif record["task_status"] == "FAILED":
-                    record["error"] = dashscope_data
-
+                    # Serialize error dict to JSON string for Pydantic validation
+                    record["error"] = json.dumps(dashscope_data, ensure_ascii=False) if isinstance(dashscope_data, dict) else str(dashscope_data)
+                
                 await _update_long_audio_task(task_id, record)
+    
     except RuntimeError as exc:
         logger.error("Paraformer fetch failed for %s: %s", task_id, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-
+    
+    # Generate meeting minutes if succeeded
     if record["task_status"] == "SUCCEEDED":
         record = await _maybe_generate_meeting_minutes(record)
         await _update_long_audio_task(task_id, record)
-
+    
+    # Build signed URL for minutes
     minutes_signed_url = _build_minutes_signed_url(record)
     if minutes_signed_url:
         record["minutes_markdown_signed_url"] = minutes_signed_url
-
+    
+    # Check if remote result expired
     expires_at_iso = record.get("remote_result_expires_at")
     remote_result_expired = False
     if expires_at_iso:
@@ -1021,7 +816,7 @@ async def get_long_audio_status(task_id: str):
                 remote_result_expired = now_dt >= expires_dt
         except ValueError:
             remote_result_expired = False
-
+    
     return LongAudioStatusResponse(
         success=True,
         data=_build_status_data(record, minutes_signed_url=minutes_signed_url),
@@ -1058,7 +853,7 @@ async def list_dashscope_tasks(
     if task_id:
         params["task_id"] = task_id
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if not task_id:
         if not end_time:
             end_time = _format_dashscope_timestamp(now)
@@ -1115,94 +910,52 @@ async def fetch_dashscope_task(dashscope_task_id: str):
 
 @router.post("/dashscope/tasks/{dashscope_task_id}/cancel", response_model=DashScopeTaskCancelResponse)
 async def cancel_dashscope_task(dashscope_task_id: str):
-    """Proxy DashScope cancel task endpoint."""
-    data = await _dashscope_task_request("POST", f"/{dashscope_task_id}/cancel")
-    return DashScopeTaskCancelResponse(
-        success=True,
-        data=data,
-        metadata={
-            "dashscope_task_id": dashscope_task_id,
-        },
-    )
-
-
-@router.get("/download/{task_id}")
-async def download_markdown(task_id: str):
-    """
-    Download Markdown meeting minutes file.
+    """Cancel a DashScope task (only PENDING tasks can be cancelled).
     
-    Args:
-        task_id: Task ID returned from /transcribe endpoint
-        
-    Returns:
-        FileResponse with Markdown file
-        
-    Raises:
-        404: If task_id not found or Markdown file doesn't exist
+    According to DashScope API docs:
+    - Only tasks in PENDING status (queued but not yet processing) can be cancelled
+    - Returns 400 UnsupportedOperation for tasks in other statuses
+    - Rate limit: 20 QPS per account
     """
+    # Check local task status first to avoid unnecessary API calls
+    record = await _get_long_audio_task_by_dashscope_id(dashscope_task_id)
+    if record:
+        current_status = record.get("task_status")
+        if current_status != "PENDING":
+            raise HTTPException(
+                status_code=400,
+                detail=f"无法取消任务: 当前状态为 {current_status},仅支持取消排队中(PENDING)的任务"
+            )
+    
     try:
-        # Search for Markdown file in default directory
-        base_dir = _resolve_short_task_dir(task_id)
-        
-        if not base_dir.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"Task not found: {task_id}"
-            )
-        
-        # Find Markdown file
-        md_files = list(base_dir.glob("*_minutes.md"))
-        
-        if not md_files:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Markdown file not found for task: {task_id}"
-            )
-        
-        md_path = md_files[0]
-        
-        # Use original filename if available, otherwise use timestamp
-        filename = md_path.stem.replace("_minutes", "")
-        download_filename = f"{filename}_会议纪要.md"
-        
-        logger.info(f"Downloading Markdown file: {md_path.name} as {download_filename}")
-        
-        # Return file response
-        return FileResponse(
-            path=md_path,
-            filename=download_filename,
-            media_type="text/markdown; charset=utf-8",
-            headers={
-                "Content-Disposition": f'attachment; filename="{download_filename}"',
-                "Cache-Control": "no-cache"
-            }
+        data = await _dashscope_task_request("POST", f"/{dashscope_task_id}/cancel")
+        return DashScopeTaskCancelResponse(
+            success=True,
+            data=data,
+            metadata={
+                "dashscope_task_id": dashscope_task_id,
+            },
         )
-    
-    except HTTPException:
+    except HTTPException as exc:
+        # DashScope returns 400 if task is not in PENDING status
+        if exc.status_code == 400:
+            logger.warning("Cannot cancel task %s: %s", dashscope_task_id, exc.detail)
+            raise HTTPException(
+                status_code=400,
+                detail="无法取消任务: 仅支持取消排队中(PENDING)的任务"
+            ) from exc
         raise
-    except Exception as e:
-        logger.error(f"Download failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to download file: {str(e)}"
-        )
 
 
 @router.get("/health")
-async def audio_health():
-    """
-    Check audio service health.
-    
-    Returns:
-        Health status and service availability
-    """
+async def health_check():
+    """Health check endpoint for long-audio service."""
     return {
-        "status": "healthy" if audio_pipeline is not None else "unavailable",
-        "service": "audio_transcription",
-        "models": {
-            "asr": "qwen3-asr-flash",
-            "llm": "qwen-plus-latest"
-        },
-        "max_file_size_mb": MAX_FILE_SIZE_MB,
-        "async_threshold_seconds": ASYNC_THRESHOLD_SECONDS
+        "status": "healthy",
+        "service": "long-audio",
+        "paraformer_available": paraformer_service is not None,
+        "meeting_minutes_available": meeting_minutes_service is not None,
+        "oss_storage_available": storage_client is not None,
+        "result_ttl_seconds": LONG_AUDIO_RESULT_TTL,
+        "poll_interval": paraformer_service.poll_interval if paraformer_service else None,
     }

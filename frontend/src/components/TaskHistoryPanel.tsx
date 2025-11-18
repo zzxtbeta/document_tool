@@ -12,6 +12,9 @@ const STATUS_FILTERS: { label: string; value: LongAudioStatus | 'ALL' }[] = [
   { label: '已取消', value: 'CANCELED' },
 ];
 
+// 轮询间隔（毫秒）
+const POLL_INTERVAL = 5000; // 5秒
+
 export const TaskHistoryPanel = () => {
   const longTasks = useAudioStore((state) => state.longTasks);
   const isLoadingTasks = useAudioStore((state) => state.isLoadingTasks);
@@ -23,13 +26,59 @@ export const TaskHistoryPanel = () => {
   const setTaskFilters = useAudioStore((state) => state.setTaskFilters);
 
   const hasFetchedRef = useRef(false);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
+  // 初始加载任务列表
   useEffect(() => {
     if (!hasFetchedRef.current) {
       hasFetchedRef.current = true;
       void loadDashScopeTasks({});
     }
   }, [loadDashScopeTasks]);
+
+  // 自动轮询未完成的任务
+  useEffect(() => {
+    const activeTasks = longTasks.filter(
+      (task) => task.status === 'PENDING' || task.status === 'RUNNING'
+    );
+
+    if (activeTasks.length > 0) {
+      // 启动轮询
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(async () => {
+          // 只刷新未完成的任务
+          for (const task of activeTasks) {
+            try {
+              await refreshLongTask(task.taskId);
+            } catch (error) {
+              // 静默处理错误,避免中断轮询
+              console.warn(`Failed to refresh task ${task.taskId}:`, error);
+            }
+          }
+        }, POLL_INTERVAL);
+      }
+    } else {
+      // 停止轮询
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    }
+
+    // 清理函数
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      // 中止所有进行中的请求
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, [longTasks, refreshLongTask]);
 
   const handleFilterChange = async (status: LongAudioStatus | 'ALL') => {
     const nextFilters = { ...taskFilters, status };
@@ -132,7 +181,15 @@ export const TaskHistoryPanel = () => {
               {task.status === 'PENDING' && (
                 <button
                   type="button"
-                  onClick={() => cancelDashScopeTask(task.dashscopeTaskId)}
+                  onClick={async () => {
+                    try {
+                      await cancelDashScopeTask(task.dashscopeTaskId);
+                      await loadDashScopeTasks(taskFilters);
+                    } catch (error) {
+                      // 错误已经在 store 中处理并显示
+                      console.warn('取消任务失败:', error);
+                    }
+                  }}
                   className="text-sm px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50"
                 >
                   取消任务

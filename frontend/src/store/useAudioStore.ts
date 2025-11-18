@@ -115,6 +115,7 @@ const mapStatusResponseToSummary = (
     remoteResultTtlSeconds: data.remote_result_ttl_seconds,
     remoteResultExpiresAt: data.remote_result_expires_at,
     localResultPaths: data.local_result_paths,
+    remoteResultUrls: data.remote_result_urls,
     localAudioPaths: data.local_audio_paths,
     localDir: data.local_dir,
     results: data.results,
@@ -124,6 +125,8 @@ const mapStatusResponseToSummary = (
     meetingMinutes: data.meeting_minutes,
     minutesMarkdownPath:
       data.minutes_markdown_path || response.metadata?.minutes_markdown_path,
+    minutesMarkdownUrl: data.minutes_markdown_url,
+    minutesMarkdownSignedUrl: data.minutes_markdown_signed_url,
     minutesGeneratedAt: data.minutes_generated_at,
     minutesError: data.minutes_error ?? response.metadata?.minutes_error ?? null,
     error: data.error,
@@ -305,7 +308,10 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
             : state.selectedTask,
       }));
     } catch (error) {
-      set({ error: extractErrorMessage(error, '刷新任务失败') });
+      // 不在轮询时设置全局错误,避免干扰用户
+      console.warn(`Failed to refresh task ${taskId}:`, error);
+      // 只在用户主动刷新时才显示错误
+      // set({ error: extractErrorMessage(error, '刷新任务失败') });
     }
   },
 
@@ -318,29 +324,36 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
           currentFilters.status && currentFilters.status !== 'ALL'
             ? currentFilters.status
             : undefined,
-        model_name: currentFilters.model,
-        page_no: 1,
-        page_size: 20,
+        page: 1,
+        page_size: 50,
       };
-      const response = await audioApi.listDashScopeTasks(params);
-      const listData = response.data || {};
-      const dashscopeTasks = listData.data ?? [];
-      const tasks = dashscopeTasks.map((item: DashScopeTask) => ({
+      
+      // 使用本地任务列表 API
+      const response = await audioApi.listLongTasks(params);
+      const tasks = response.data.map((item) => ({
         taskId: item.task_id,
-        dashscopeTaskId: item.task_id,
+        dashscopeTaskId: item.dashscope_task_id,
         taskType: 'long' as const,
-        origin: 'dashscope' as const,
-        model: item.model_name || '-',
-        status: item.status as LongAudioStatus,
-        fileUrls: [],
-        submittedAt: item.start_time ? new Date(item.start_time).toISOString() : '',
-        updatedAt: item.end_time ? new Date(item.end_time).toISOString() : '',
+        origin: 'local' as const,
+        model: item.model,
+        status: item.task_status,
+        fileUrls: item.file_urls || [],
+        languageHints: item.language_hints || [],
+        submittedAt: item.submitted_at || '',
+        updatedAt: item.updated_at || '',
+        localResultPaths: item.local_result_paths,
+        remoteResultTtlSeconds: item.remote_result_ttl_seconds,
+        remoteResultExpiresAt: item.remote_result_expires_at,
+        transcriptionText: item.transcription_text,
+        meetingMinutes: item.meeting_minutes,
+        error: item.error,
       }));
-      set((state) => ({
-        longTasks: mergeTasks(state.longTasks, tasks),
+      
+      set({
+        longTasks: tasks,
         isLoadingTasks: false,
-        dashscopeTotal: listData.total,
-      }));
+        dashscopeTotal: response.metadata.total,
+      });
     } catch (error) {
       set({
         isLoadingTasks: false,
@@ -360,7 +373,9 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
         ),
       }));
     } catch (error) {
-      set({ error: extractErrorMessage(error, '取消失败') });
+      const errorMsg = extractErrorMessage(error, '取消失败');
+      set({ error: errorMsg });
+      throw error; // Re-throw so component can handle it
     }
   },
 

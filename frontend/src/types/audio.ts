@@ -143,6 +143,7 @@ export interface LongAudioStatusResponse {
     minutes_markdown_signed_url?: string;
     minutes_generated_at?: string;
     minutes_error?: string | null;
+    error?: string | null;
     user_id?: string;
     project_id?: string;
     source_filename?: string;

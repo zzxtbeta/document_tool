@@ -8,7 +8,7 @@ from typing import Optional
 
 from dashscope import Generation
 
-from api.audio_models import MeetingMinutes
+from api.audio.shared_models import MeetingMinutes
 
 logger = logging.getLogger(__name__)
 
