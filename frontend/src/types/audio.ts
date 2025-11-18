@@ -97,6 +97,7 @@ export interface LongAudioTaskSummary {
   remoteResultTtlSeconds?: number;
   remoteResultExpiresAt?: string;
   localResultPaths?: string[];
+  remoteResultUrls?: string[];
   localAudioPaths?: string[];
   localDir?: string;
   results?: LongAudioResult[];
@@ -105,8 +106,13 @@ export interface LongAudioTaskSummary {
   transcriptionText?: string;
   meetingMinutes?: MeetingMinutes;
   minutesMarkdownPath?: string;
+  minutesMarkdownUrl?: string;
+  minutesMarkdownSignedUrl?: string;
   minutesGeneratedAt?: string;
   minutesError?: string | null;
+  userId?: string;
+  projectId?: string;
+  sourceFilename?: string;
   error?: string | null;
 }
 
@@ -123,6 +129,7 @@ export interface LongAudioStatusResponse {
     updated_at: string;
     results?: LongAudioResult[];
     local_result_paths?: string[];
+    remote_result_urls?: string[];
     local_audio_paths?: string[];
     local_dir?: string;
     remote_result_ttl_seconds?: number;
@@ -132,9 +139,13 @@ export interface LongAudioStatusResponse {
     transcription_text?: string;
     meeting_minutes?: MeetingMinutes;
     minutes_markdown_path?: string;
+    minutes_markdown_url?: string;
+    minutes_markdown_signed_url?: string;
     minutes_generated_at?: string;
     minutes_error?: string | null;
-    error?: string | null;
+    user_id?: string;
+    project_id?: string;
+    source_filename?: string;
   };
   metadata: {
     timestamp: string;
@@ -144,6 +155,8 @@ export interface LongAudioStatusResponse {
     remote_result_expired?: boolean;
     meeting_minutes_ready?: boolean;
     minutes_markdown_path?: string;
+    minutes_markdown_url?: string;
+    minutes_markdown_signed_url?: string;
     minutes_error?: string | null;
   };
 }

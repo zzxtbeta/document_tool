@@ -7,6 +7,7 @@ python-dotenv>=1.0.0
 
 # DashScope API (for ASR and LLM)
 dashscope>=1.14.0
+oss2==2.18.2
 
 # Image processing dependencies
 easyocr>=1.7.0              # OCR text recognition for image filtering

@@ -17,14 +17,15 @@
 - [x] 2.3 新增可配置环境变量（模型名称、轮询间隔、超时、存储目录），落地在 `.env(.example)`、`audio_api.py`、`paraformer_long_audio.py`
 - [x] 2.4 编写结果落盘逻辑，将 DashScope 转写 JSON 保存至 `uploads/audios/long/{timestamp}_long_{dashscope_task_id}/`，并同时缓存源音频
 - [x] 2.5 统一长/短音频本地存储命名与目录结构（短音频落盘 `uploads/audios/short/{timestamp}_short_{task_id}`，并缓存结果 JSON / Markdown 路径）
-- [ ] 2.6 引入 PostgreSQL 单表持久化（`long_audio_tasks`）
-  - [ ] 2.6.1 通过 `.env` (`DATABASE_URL`) + `db/database.py` 建立 psycopg3 async 连接工厂
-  - [ ] 2.6.2 定义 `long_audio_tasks` 表结构（task_id/dashscope_task_id/status/model/file_urls/jsonb results/TTL timestamps）并创建索引
-  - [ ] 2.6.3 提交/轮询 API 改为读写数据库，淘汰内存 `TaskStore`，保持字段兼容
-- [ ] 2.7 复用会议纪要生成逻辑（短/长音频共用）
-  - [ ] 2.7.1 抽象 `MeetingMinutesService`（或等价拆分）以便独立生成 Markdown/JSON 纪要
-  - [ ] 2.7.2 长音频任务 SUCCEEDED 时调用纪要服务，保存 Markdown + 结构化结果到数据库字段
-  - [ ] 2.7.3 `LongAudioStatusResponse` 返回 `meeting_minutes`、`minutes_markdown_path`、`minutes_error` 等可选字段
+- [x] 2.6 引入 PostgreSQL 单表持久化（`long_audio_tasks`）
+  - [x] 2.6.1 通过 `.env` (`DATABASE_URL`) + `db/database.py` 建立 psycopg3 async 连接工厂（current backend 运行中使用 async pool）
+  - [x] 2.6.2 定义 `long_audio_tasks` 表结构（含 user_id/project_id/source_filename/oss_object_prefix 等新增列）并创建索引
+  - [x] 2.6.3 提交/轮询 API 改为读写数据库，淘汰内存 `TaskStore`，保持字段兼容（task 元数据、TTL、last_fetch_at 均由数据库驱动）
+- [x] 2.7 复用会议纪要生成逻辑（短/长音频共用）
+  - [x] 2.7.1 抽象 `MeetingMinutesService`（或等价拆分）以便独立生成 Markdown/JSON 纪要
+  - [x] 2.7.2 长音频任务 SUCCEEDED 时调用纪要服务，保存 Markdown + 结构化结果到数据库字段
+  - [x] 2.7.3 `LongAudioStatusResponse` 返回 `meeting_minutes`、`minutes_markdown_path`、`minutes_markdown_url`、`minutes_error`、`minutes_markdown_signed_url` 等可选字段
+  - [x] 2.7.4 引入 `OSSStorageClient`，按 `prefix/bronze/userUploads/{projectId}/audio/{taskId}/` 上传纪要与转写 JSON，记录 OSS URL、object key，并生成 10 分钟有效的签名下载链接
 
 ## 3. 错误处理与限制
 - [x] 3.1 将 DashScope 错误码映射为相应的 HTTP 响应（如 InvalidFile、DownloadFailed）（submission/fetch 失败会返回 4xx/5xx 并记录日志）

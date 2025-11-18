@@ -9,7 +9,7 @@ import type {
 
 // 配置 axios 实例
 const apiClient = axios.create({
-  baseURL: '/api',
+  baseURL: '/',
   timeout: 300000,
   headers: {
     'Content-Type': 'multipart/form-data',
@@ -17,7 +17,7 @@ const apiClient = axios.create({
 });
 
 const jsonClient = axios.create({
-  baseURL: '/api',
+  baseURL: '/',
   timeout: 120000,
 });
 

@@ -181,15 +181,14 @@
 
 - [x] 启动后端服务（`uvicorn api:app --reload`）
 - [x] 启动前端开发服务器（`npm run dev`）
-- [x] 配置 Vite 代理（解决跨域问题）
+  - [x] 配置 Vite 代理（解决跨域问题，保持 `/api` 前缀透传至后端）
   ```typescript
-  // vite.config.ts - 已配置
+  // vite.config.ts - 当前配置
   server: {
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       }
     }
   }

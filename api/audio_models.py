@@ -117,6 +117,9 @@ class LongAudioTranscriptionRequest(BaseModel):
         default=None,
         description="Language codes (only valid when model=paraformer-v2)"
     )
+    user_id: Optional[str] = Field(default=None, description="Application user identifier")
+    project_id: Optional[str] = Field(default=None, description="Project/tenant identifier")
+    source_filename: Optional[str] = Field(default=None, description="Original filename for downstream assets")
 
 
 class LongAudioTaskInfo(BaseModel):
@@ -156,6 +159,10 @@ class LongAudioStatusData(BaseModel):
         default=None,
         description="Local file paths of cached transcription JSON"
     )
+    remote_result_urls: Optional[List[AnyUrl]] = Field(
+        default=None,
+        description="OSS URLs of cached transcription JSON"
+    )
     local_audio_paths: Optional[List[str]] = Field(
         default=None,
         description="Local copies of source audio files"
@@ -185,6 +192,14 @@ class LongAudioStatusData(BaseModel):
         default=None,
         description="Local path to generated meeting minutes Markdown file"
     )
+    minutes_markdown_url: Optional[AnyUrl] = Field(
+        default=None,
+        description="OSS URL/path of meeting minutes Markdown file"
+    )
+    minutes_markdown_signed_url: Optional[AnyUrl] = Field(
+        default=None,
+        description="Temporary signed URL for downloading minutes Markdown"
+    )
     minutes_generated_at: Optional[str] = Field(
         default=None,
         description="ISO8601 timestamp when meeting minutes were generated"
@@ -193,6 +208,9 @@ class LongAudioStatusData(BaseModel):
         default=None,
         description="Error message if meeting minutes generation failed"
     )
+    user_id: Optional[str] = Field(default=None, description="Task owner user ID")
+    project_id: Optional[str] = Field(default=None, description="Tenant or project identifier")
+    source_filename: Optional[str] = Field(default=None, description="Original filename derived from OSS URL")
 
 
 class LongAudioStatusResponse(BaseModel):
