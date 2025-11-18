@@ -139,6 +139,7 @@ output_dir: uploads/audio               # 输出目录（可选）
 - 当用户点击列表项时，UI SHALL 打开 Drawer/Modal，将 JSON 结果关键信息（音频 URL、语言、subtask_status、transcription_url、本地缓存路径）渲染为易读 Markdown 或卡片。
 - 对 `local_result_paths` 中的 JSON，提供“下载 JSON”按钮；对 `local_audio_paths` 提供“下载音频”按钮。
 - 对成功的长音频任务，默认展示 DashScope 文本摘要（可从 JSON `text` 字段或自定义字段提取）；若 JSON 中缺少原文，需要提示“请下载 JSON 查看完整内容”。
+- UI MUST 在长音频任务 `meeting_minutes` 字段可用后渲染会议纪要卡片：包括标题、主要内容摘要、关键引述、关键词及“生成时间”；若 `minutes_markdown_path` 存在，应提供“复制/查看路径”或下载指南；若 `minutes_error` 存在或纪要仍在生成，则显示状态提示（如“纪要生成中…”、“纪要生成失败：{error}”）。
 
 #### Requirement: DashScope 代理接口集成
 - UI MUST 使用新增的 `/api/v1/audio/dashscope/tasks` 和 `/api/v1/audio/dashscope/tasks/{dashscope_task_id}` 接口来展示历史任务及底层详情，默认查询最近 24h，支持分页与状态过滤。

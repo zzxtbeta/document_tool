@@ -94,6 +94,13 @@ const mapStatusResponseToSummary = (
   response: LongAudioStatusResponse
 ): LongAudioTaskSummary => {
   const data = response.data;
+  const firstResult = Array.isArray(data.results) ? data.results[0] : undefined;
+  const summarySnippet =
+    data.summary_snippet ||
+    data.meeting_minutes?.content?.slice(0, 200) ||
+    data.transcription_text?.slice(0, 200) ||
+    firstResult?.text ||
+    firstResult?.content;
   return {
     taskId: data.task_id,
     dashscopeTaskId: data.dashscope_task_id,
@@ -111,6 +118,14 @@ const mapStatusResponseToSummary = (
     localAudioPaths: data.local_audio_paths,
     localDir: data.local_dir,
     results: data.results,
+    transcriptionUrl: firstResult?.transcription_url,
+    summarySnippet,
+    transcriptionText: data.transcription_text,
+    meetingMinutes: data.meeting_minutes,
+    minutesMarkdownPath:
+      data.minutes_markdown_path || response.metadata?.minutes_markdown_path,
+    minutesGeneratedAt: data.minutes_generated_at,
+    minutesError: data.minutes_error ?? response.metadata?.minutes_error ?? null,
     error: data.error,
   };
 };

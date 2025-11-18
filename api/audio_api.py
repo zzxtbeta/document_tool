@@ -14,7 +14,7 @@ import shutil
 import asyncio
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form
@@ -37,7 +37,12 @@ from api.audio_models import (
 )
 from pipelines.audio_pipeline import AudioPipeline
 from pipelines.paraformer_long_audio import ParaformerLongAudioService
+from pipelines.meeting_minutes_service import MeetingMinutesService
 import httpx
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+
+from db.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,12 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize Paraformer service: {e}")
     paraformer_service = None
+
+try:
+    meeting_minutes_service = MeetingMinutesService()
+except Exception as e:
+    logger.error(f"Failed to initialize MeetingMinutesService: {e}")
+    meeting_minutes_service = None
 
 
 # =============================================================================
@@ -78,9 +89,10 @@ LONG_AUDIO_RESULT_TTL = int(os.getenv("LONG_AUDIO_RESULT_TTL", str(24 * 3600))) 
 DASHSCOPE_TASK_API_BASE = os.getenv("DASHSCOPE_TASK_API_BASE", "https://dashscope.aliyuncs.com/api/v1/tasks")
 DASHSCOPE_HTTP_TIMEOUT = float(os.getenv("DASHSCOPE_HTTP_TIMEOUT", "30"))
 
-long_audio_tasks: Dict[str, Dict[str, Any]] = {}
-long_audio_tasks_lock = asyncio.Lock()
 PARAFORMER_FINAL_STATUSES = {"SUCCEEDED", "FAILED"}
+LONG_AUDIO_TASKS_TABLE = os.getenv("LONG_AUDIO_TASKS_TABLE", "long_audio_tasks")
+_long_audio_table_ready = False
+_long_audio_table_lock = asyncio.Lock()
 
 
 # =============================================================================
@@ -214,23 +226,196 @@ async def _dashscope_task_request(
     return payload
 
 
-async def _get_long_audio_task(task_id: str) -> Optional[Dict[str, Any]]:
-    async with long_audio_tasks_lock:
-        task = long_audio_tasks.get(task_id)
-        if task:
-            return task.copy()
+async def _ensure_long_audio_table():
+    global _long_audio_table_ready
+    if _long_audio_table_ready:
+        return
+    async with _long_audio_table_lock:
+        if _long_audio_table_ready:
+            return
+        pool = await DatabaseManager.get_pool()
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {LONG_AUDIO_TASKS_TABLE} (
+            task_id TEXT PRIMARY KEY,
+            dashscope_task_id TEXT NOT NULL,
+            task_status TEXT NOT NULL,
+            model TEXT NOT NULL,
+            file_urls TEXT[] NOT NULL,
+            language_hints TEXT[],
+            results JSONB,
+            local_result_paths TEXT[],
+            local_audio_paths TEXT[],
+            local_dir TEXT,
+            remote_result_ttl_seconds INTEGER,
+            remote_result_expires_at TIMESTAMPTZ,
+            last_fetch_at TIMESTAMPTZ,
+            submitted_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL,
+            error JSONB,
+            transcription_text TEXT,
+            meeting_minutes JSONB,
+            minutes_markdown_path TEXT,
+            minutes_generated_at TIMESTAMPTZ,
+            minutes_error TEXT
+        )
+        """
+        create_idx_status = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_status ON {LONG_AUDIO_TASKS_TABLE}(task_status)"
+        create_idx_dashscope = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_dashscope ON {LONG_AUDIO_TASKS_TABLE}(dashscope_task_id)"
+        create_idx_submitted = f"CREATE INDEX IF NOT EXISTS idx_{LONG_AUDIO_TASKS_TABLE}_submitted_at ON {LONG_AUDIO_TASKS_TABLE}(submitted_at DESC)"
+        alter_columns = [
+            "transcription_text TEXT",
+            "meeting_minutes JSONB",
+            "minutes_markdown_path TEXT",
+            "minutes_generated_at TIMESTAMPTZ",
+            "minutes_error TEXT"
+        ]
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(create_table_sql)
+                await cur.execute(create_idx_status)
+                await cur.execute(create_idx_dashscope)
+                await cur.execute(create_idx_submitted)
+                for col in alter_columns:
+                    await cur.execute(f"ALTER TABLE {LONG_AUDIO_TASKS_TABLE} ADD COLUMN IF NOT EXISTS {col}")
+        _long_audio_table_ready = True
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
         return None
 
 
+def _row_to_long_audio_record(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _iso(dt: Optional[datetime]) -> Optional[str]:
+        return dt.isoformat() if isinstance(dt, datetime) else None
+
+    return {
+        "task_id": row.get("task_id"),
+        "dashscope_task_id": row.get("dashscope_task_id"),
+        "task_status": row.get("task_status"),
+        "model": row.get("model"),
+        "file_urls": row.get("file_urls") or [],
+        "language_hints": row.get("language_hints") or None,
+        "submitted_at": _iso(row.get("submitted_at")),
+        "updated_at": _iso(row.get("updated_at")),
+        "results": row.get("results"),
+        "local_result_paths": row.get("local_result_paths"),
+        "local_audio_paths": row.get("local_audio_paths"),
+        "local_dir": row.get("local_dir"),
+        "remote_result_ttl_seconds": row.get("remote_result_ttl_seconds"),
+        "remote_result_expires_at": _iso(row.get("remote_result_expires_at")),
+        "last_fetch_at": _iso(row.get("last_fetch_at")),
+        "error": row.get("error"),
+        "transcription_text": row.get("transcription_text"),
+        "meeting_minutes": row.get("meeting_minutes"),
+        "minutes_markdown_path": row.get("minutes_markdown_path"),
+        "minutes_generated_at": _iso(row.get("minutes_generated_at")),
+        "minutes_error": row.get("minutes_error"),
+    }
+
+
+def _record_to_db_params(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "task_id": record["task_id"],
+        "dashscope_task_id": record["dashscope_task_id"],
+        "task_status": record["task_status"],
+        "model": record["model"],
+        "file_urls": record.get("file_urls") or [],
+        "language_hints": record.get("language_hints"),
+        "results": Json(record.get("results")) if record.get("results") is not None else None,
+        "local_result_paths": record.get("local_result_paths"),
+        "local_audio_paths": record.get("local_audio_paths"),
+        "local_dir": record.get("local_dir"),
+        "remote_result_ttl_seconds": record.get("remote_result_ttl_seconds"),
+        "remote_result_expires_at": _parse_iso_datetime(record.get("remote_result_expires_at")),
+        "last_fetch_at": _parse_iso_datetime(record.get("last_fetch_at")),
+        "submitted_at": _parse_iso_datetime(record.get("submitted_at")),
+        "updated_at": _parse_iso_datetime(record.get("updated_at")),
+        "error": Json(record.get("error")) if record.get("error") is not None else None,
+        "transcription_text": record.get("transcription_text"),
+        "meeting_minutes": Json(record.get("meeting_minutes")) if record.get("meeting_minutes") is not None else None,
+        "minutes_markdown_path": record.get("minutes_markdown_path"),
+        "minutes_generated_at": _parse_iso_datetime(record.get("minutes_generated_at")),
+        "minutes_error": record.get("minutes_error"),
+    }
+
+
+async def _get_long_audio_task(task_id: str) -> Optional[Dict[str, Any]]:
+    await _ensure_long_audio_table()
+    pool = await DatabaseManager.get_pool()
+    try:
+        async with pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    f"SELECT * FROM {LONG_AUDIO_TASKS_TABLE} WHERE task_id = %s",
+                    (task_id,),
+                )
+                row = await cur.fetchone()
+    except Exception as exc:
+        logger.error("Failed to load long audio task %s: %s", task_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to load task status") from exc
+
+    if not row:
+        return None
+    return _row_to_long_audio_record(row)
+
+
+async def _upsert_long_audio_task(record: Dict[str, Any]):
+    await _ensure_long_audio_table()
+    pool = await DatabaseManager.get_pool()
+    params = _record_to_db_params(record)
+    columns = [
+        "task_id",
+        "dashscope_task_id",
+        "task_status",
+        "model",
+        "file_urls",
+        "language_hints",
+        "results",
+        "local_result_paths",
+        "local_audio_paths",
+        "local_dir",
+        "remote_result_ttl_seconds",
+        "remote_result_expires_at",
+        "last_fetch_at",
+        "submitted_at",
+        "updated_at",
+        "error",
+        "transcription_text",
+        "meeting_minutes",
+        "minutes_markdown_path",
+        "minutes_generated_at",
+        "minutes_error",
+    ]
+    placeholders = ", ".join(["%s"] * len(columns))
+    update_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in columns[1:]])
+    query = f"""
+        INSERT INTO {LONG_AUDIO_TASKS_TABLE} ({', '.join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT (task_id) DO UPDATE SET {update_clause}
+    """
+    values = [params[col] for col in columns]
+    try:
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(query, values)
+    except Exception as exc:
+        logger.error("Failed to persist long audio task %s: %s", record.get("task_id"), exc)
+        raise HTTPException(status_code=500, detail="Failed to persist task state") from exc
+
+
 async def _store_long_audio_task(task_id: str, data: Dict[str, Any]):
-    async with long_audio_tasks_lock:
-        long_audio_tasks[task_id] = data
+    await _upsert_long_audio_task(data)
 
 
 async def _update_long_audio_task(task_id: str, data: Dict[str, Any]):
-    async with long_audio_tasks_lock:
-        if task_id in long_audio_tasks:
-            long_audio_tasks[task_id] = data
+    await _upsert_long_audio_task(data)
 
 
 def _validate_long_audio_urls(urls: List[str]):
@@ -259,8 +444,93 @@ def _build_status_data(record: Dict[str, Any]) -> LongAudioStatusData:
         local_dir=record.get("local_dir"),
         remote_result_ttl_seconds=record.get("remote_result_ttl_seconds"),
         remote_result_expires_at=record.get("remote_result_expires_at"),
-        error=record.get("error")
+        error=record.get("error"),
+        transcription_text=record.get("transcription_text"),
+        meeting_minutes=record.get("meeting_minutes"),
+        minutes_markdown_path=record.get("minutes_markdown_path"),
+        minutes_generated_at=record.get("minutes_generated_at"),
+        minutes_error=record.get("minutes_error"),
     )
+
+
+def _extract_transcription_text(results: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    if not results:
+        return None
+    fragments: List[str] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        transcripts = result.get("transcripts")
+        if isinstance(transcripts, list):
+            for entry in transcripts:
+                if isinstance(entry, dict):
+                    text = entry.get("text")
+                    if text:
+                        fragments.append(text.strip())
+        text = result.get("transcript") or result.get("text")
+        if text:
+            fragments.append(str(text).strip())
+    combined = "\n\n".join(filter(None, fragments)).strip()
+    return combined or None
+
+
+def _load_transcription_from_cached_results(paths: Optional[List[str]]) -> Optional[str]:
+    if not paths:
+        return None
+    for path_str in paths:
+        if not path_str:
+            continue
+        try:
+            path = Path(path_str)
+        except TypeError:
+            continue
+        if not path.exists():
+            logger.warning("Cached transcription missing: %s", path)
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to parse cached transcription %s: %s", path, exc)
+            continue
+        text = _extract_transcription_text([payload])
+        if text:
+            return text
+    return None
+
+
+async def _maybe_generate_meeting_minutes(record: Dict[str, Any]) -> Dict[str, Any]:
+    if meeting_minutes_service is None:
+        return record
+    if record.get("meeting_minutes"):
+        return record
+    if record.get("minutes_error"):
+        return record
+    transcription_text = record.get("transcription_text")
+    if not transcription_text:
+        if not record.get("local_result_paths") and record.get("results") and paraformer_service is not None:
+            task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
+            task_dir.mkdir(parents=True, exist_ok=True)
+            record["local_dir"] = str(task_dir)
+            record["local_result_paths"] = paraformer_service.cache_transcriptions(task_dir, record.get("results"))
+        transcription_text = _load_transcription_from_cached_results(record.get("local_result_paths"))
+        if transcription_text:
+            record["transcription_text"] = transcription_text
+    if not transcription_text:
+        return record
+    try:
+        minutes = meeting_minutes_service.generate_minutes(transcription_text)
+        record["meeting_minutes"] = minutes.model_dump(mode="json")
+        record["minutes_generated_at"] = datetime.now(timezone.utc).isoformat()
+        task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
+        task_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = task_dir / "meeting_minutes.md"
+        meeting_minutes_service.save_as_markdown(minutes, markdown_path, transcript=transcription_text)
+        record["minutes_markdown_path"] = str(markdown_path)
+        record["minutes_error"] = None
+    except Exception as exc:
+        logger.error("Meeting minutes generation failed for %s: %s", record.get("task_id"), exc)
+        record["minutes_error"] = str(exc)
+    return record
 
 
 # =============================================================================
@@ -491,7 +761,7 @@ async def submit_long_audio_transcription(request: LongAudioTranscriptionRequest
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     task_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     record = {
         "task_id": task_id,
         "dashscope_task_id": submission["task_id"],
@@ -541,7 +811,7 @@ async def get_long_audio_status(task_id: str):
     if not record:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    now_dt = datetime.utcnow()
+    now_dt = datetime.now(timezone.utc)
     poll_interval = getattr(paraformer_service, "poll_interval", 10)
     should_fetch = record["task_status"] not in PARAFORMER_FINAL_STATUSES
     last_fetch_iso = record.get("last_fetch_at")
@@ -560,7 +830,7 @@ async def get_long_audio_status(task_id: str):
                 record["last_fetch_at"] = now_dt.isoformat()
                 record["task_status"] = dashscope_data["task_status"]
                 record["results"] = dashscope_data.get("results")
-                record["updated_at"] = datetime.utcnow().isoformat()
+                record["updated_at"] = datetime.now(timezone.utc).isoformat()
 
                 if record["task_status"] == "SUCCEEDED" and record["results"]:
                     task_dir = Path(record.get("local_dir") or LONG_AUDIO_RESULTS_DIR / record["dashscope_task_id"])
@@ -571,6 +841,8 @@ async def get_long_audio_status(task_id: str):
                     ttl_seconds = record.get("remote_result_ttl_seconds") or LONG_AUDIO_RESULT_TTL
                     record["remote_result_ttl_seconds"] = ttl_seconds
                     record["remote_result_expires_at"] = (now_dt + timedelta(seconds=ttl_seconds)).isoformat()
+                    if not record.get("transcription_text"):
+                        record["transcription_text"] = _extract_transcription_text(record["results"])
                 elif record["task_status"] == "FAILED":
                     record["error"] = dashscope_data
 
@@ -579,11 +851,19 @@ async def get_long_audio_status(task_id: str):
         logger.error("Paraformer fetch failed for %s: %s", task_id, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    if record["task_status"] == "SUCCEEDED":
+        record = await _maybe_generate_meeting_minutes(record)
+        await _update_long_audio_task(task_id, record)
+
     expires_at_iso = record.get("remote_result_expires_at")
     remote_result_expired = False
     if expires_at_iso:
         try:
-            remote_result_expired = datetime.utcnow() >= datetime.fromisoformat(expires_at_iso)
+            expires_dt = _parse_iso_datetime(expires_at_iso)
+            if expires_dt is not None and expires_dt.tzinfo is None:
+                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+            if expires_dt is not None:
+                remote_result_expired = now_dt >= expires_dt
         except ValueError:
             remote_result_expired = False
 
@@ -591,11 +871,14 @@ async def get_long_audio_status(task_id: str):
         success=True,
         data=_build_status_data(record),
         metadata={
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": now_dt.isoformat(),
             "poll_interval_seconds": poll_interval,
             "remote_result_ttl_seconds": record.get("remote_result_ttl_seconds"),
             "remote_result_expires_at": expires_at_iso,
             "remote_result_expired": remote_result_expired,
+            "meeting_minutes_ready": bool(record.get("meeting_minutes")),
+            "minutes_markdown_path": record.get("minutes_markdown_path"),
+            "minutes_error": record.get("minutes_error"),
         }
     )
 

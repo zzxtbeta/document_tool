@@ -42,6 +42,36 @@ DashScope `Transcription` 异步 API 需要先通过 `async_call` 提交任务�
 - `LongAudioStatusData` 新增字段：`remote_result_ttl_seconds`, `remote_result_expires_at`。
 - 状态响应 metadata 增加 `poll_interval_seconds`, `remote_result_expired`。
 
+### OSS 接入与持久化
+- 运行环境提供 OSS（或兼容 S3）的访问凭证，配置项包括 `OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID/SECRET`。
+- 客户端在我们的系统之外先把音频上传到 OSS，因此 `file_urls` 已经指向 OSS；服务端不再重复上传原始音频。
+- 当任务首次 `SUCCEEDED` 时：
+  1. 仍在本地暂存 DashScope JSON（方便拼接转写文本/重试）。
+  2. 生成纪要 Markdown 后，通过统一的 `StorageClient` 上传至 OSS，得到 `minutes_markdown_url`，成功后可删除本地 Markdown。
+  3. 仅 Markdown 需要回写 OSS；JSON、音频如需长期保留可由运维策略单独同步，避免重复存储。
+- OSS 只存文件，所有可搜索字段（任务状态、URL、错误信息、生成时间）仍写入数据库，防止“把对象存储当数据库”。
+- 上传失败要有重试与错误字段：
+  - 第一次失败：记录 `minutes_error`，并保留本地 Markdown，供后台或人工重试。
+  - 触发新的 `GET /transcribe-long/{task_id}` 且状态仍为 SUCCEEDED 时，如果 `minutes_markdown_url` 为空则再尝试上传；连失败次数可在日志里标记。
+
+### 数据存储（PostgreSQL 单表）
+- 通过 `.env` 中的 `DATABASE_URL`（示例：`postgresql://postgres:***@host:5432/db?sslmode=disable`）配置连接，统一由 `db/database.py` 基于 **psycopg3 (async)** 的客户端管理。
+- 单表结构在原字段基础上新增：
+  - `minutes_markdown_url TEXT`
+  - `remote_result_urls TEXT[]`（可选，用于存 OSS 上的 JSON 副本）
+  - `upload_attempts INTEGER`（可选，追踪 OSS 重试次数）
+- 仍以 `task_id` 为唯一索引；常用查询列建立 B-Tree 索引。
+- API 读写全部经过数据库：提交任务写入基础字段；轮询成功后追加 Markdown URL/纪要 JSON/错误信息。
+
+### 会议纪要生成（与短音频复用）
+保持短/长音频纪要模板与模型一致，复用 `AudioPipeline.generate_meeting_minutes` & `save_as_markdown` 逻辑，抽象为独立 `MeetingMinutesService`（或等价的可注入组件）。
+- 当长音频任务在轮询中首次进入 `SUCCEEDED`：
+  1. 在本地缓存 JSON 后拼接完整转写文本；
+  2. 调用纪要服务生成结构化结果（title/content/quotes/keywords）；
+  3. 将 Markdown 保存至 `uploads/audios/long/{task_id}/minutes.md`，并写入数据库字段 `meeting_minutes`（JSONB） + `minutes_markdown_path`；
+  4. `LongAudioStatusResponse` 追加上述字段，若纪要仍在生成或失败，以 `null` + metadata 提示。
+- 初期在 API 请求线程中同步执行，后续可扩展为后台任务。需留出重试/错误字段（如 `minutes_error`）以便 UI 告知失败原因。
+
 ### 错误/超时
 - 若 `LONG_AUDIO_TIMEOUT` 触发（未来扩展），可将任务标记为 FAILED 并提示 `Processing timeout`。
 - DashScope 返回 FAILED 时继续暴露 code/message，用于 UI 告警。

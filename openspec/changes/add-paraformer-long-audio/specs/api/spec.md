@@ -29,14 +29,16 @@
 #### Scenario: 结果持久化
 - **GIVEN** 任务状态 SUCCEEDED
 - **WHEN** 系统获取 `transcription_url`
-- **THEN** 应将 JSON 结果缓存到 `uploads/audios/long/{task_id}/`
-- **AND** 在状态查询中返回缓存路径 (如 `local_result_path`)
+- **THEN** 应先将 JSON 结果缓存到 `uploads/audios/long/{task_id}/` 以便拼接全文
+- **AND** 生成会议纪要 Markdown 后需上传到 OSS，返回 `minutes_markdown_url`
+- **AND** 在状态查询中同时返回本地调试路径与 OSS URL，数据库需记录 URL 以便后续查询
 
 #### Scenario: 结果有效期与缓存策略
 - **GIVEN** DashScope 官方仅保证异步任务结果保留 24 小时
 - **WHEN** 客户端尝试使用既有 `transcription_url`
 - **THEN** 系统 SHALL 明确提示 URL 超时将失效, 通过本地缓存提供副本并暴露 `local_result_paths`
 - **AND** 过期后再次调用 `Transcription.fetch` 可能返回 UNKNOWN, 系统需返回 404/过期提示
+- **AND** 若 OSS 上传 Markdown 失败，系统应在 `minutes_error` 中记录并允许后续查询触发重试
 
 #### Scenario: 配置与超时
 - **GIVEN** 管理员设置 `LONG_AUDIO_POLL_INTERVAL` 与 `LONG_AUDIO_TIMEOUT`
@@ -48,6 +50,18 @@
 - **WHEN** 后端调用 `Transcription.fetch`
 - **THEN** 系统 SHALL 采用节流/退避策略 (不少于配置的 `LONG_AUDIO_POLL_INTERVAL`), 确保不会超过官方限额
 - **AND** 一旦任务进入 SUCCEEDED 或 FAILED, 必须停止进一步轮询, 仅返回缓存结果
+
+#### Scenario: 任务持久化 (PostgreSQL 单表)
+- **GIVEN** 系统提供 `DATABASE_URL` 环境变量并连接 PostgreSQL
+- **WHEN** 提交或更新长音频任务
+- **THEN** 系统 SHALL 在 `long_audio_tasks` 单表中持久化任务元数据, 至少包含 `task_id`, `dashscope_task_id`, `task_status`, `model`, `file_urls`, `language_hints`, `results`, `local_result_paths`, `local_audio_paths`, `remote_result_ttl_seconds`, `remote_result_expires_at`, `last_fetch_at`, `submitted_at`, `updated_at`
+- **AND** 查询接口 SHALL 以该表为权威数据源, 以保证服务重启或多实例情况下的状态一致性
+
+#### Scenario: 长音频会议纪要生成（共享逻辑）
+- **GIVEN** 系统已为短音频实现会议纪要生成 (`AudioPipeline.generate_meeting_minutes`)
+- **WHEN** 某长音频任务状态变为 `SUCCEEDED`
+- **THEN** `GET /api/v1/audio/transcribe-long/{task_id}` SHALL 在缓存 DashScope 结果后, 使用相同的纪要生成逻辑（相同 prompt/模型）生成结构化纪要
+- **AND** Markdown 结果必须上传至 OSS，API 响应同时返回 `minutes_markdown_path`（本地备份）与 `minutes_markdown_url`（OSS 访问地址）；若纪要仍在生成/失败, 字段可为 `null` 并在 metadata 中提示
 
 ### Requirement: DashScope 异步任务管理代理
 系统 SHALL 暴露 DashScope 官方任务管理接口的受控代理, 便于用户查询/列表/取消任务而无需暴露 API Key。

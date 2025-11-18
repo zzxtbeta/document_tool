@@ -102,6 +102,11 @@ export interface LongAudioTaskSummary {
   results?: LongAudioResult[];
   transcriptionUrl?: string;
   summarySnippet?: string;
+  transcriptionText?: string;
+  meetingMinutes?: MeetingMinutes;
+  minutesMarkdownPath?: string;
+  minutesGeneratedAt?: string;
+  minutesError?: string | null;
   error?: string | null;
 }
 
@@ -124,6 +129,11 @@ export interface LongAudioStatusResponse {
     remote_result_expires_at?: string;
     transcription_url?: string;
     summary_snippet?: string;
+    transcription_text?: string;
+    meeting_minutes?: MeetingMinutes;
+    minutes_markdown_path?: string;
+    minutes_generated_at?: string;
+    minutes_error?: string | null;
     error?: string | null;
   };
   metadata: {
@@ -132,6 +142,9 @@ export interface LongAudioStatusResponse {
     remote_result_ttl_seconds?: number;
     remote_result_expires_at?: string;
     remote_result_expired?: boolean;
+    meeting_minutes_ready?: boolean;
+    minutes_markdown_path?: string;
+    minutes_error?: string | null;
   };
 }
 

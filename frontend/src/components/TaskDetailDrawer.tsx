@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 import { useAudioStore } from '../store/useAudioStore';
 import { STATUS_LABEL, STATUS_STYLE } from './taskStatus';
+import { MeetingMinutesCard } from './MeetingMinutesCard';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
   <div className="space-y-2">
@@ -117,6 +118,18 @@ export const TaskDetailDrawer = () => {
           {selectedTask.summarySnippet && (
             <Section title="识别摘要">
               <p className="text-sm whitespace-pre-wrap">{selectedTask.summarySnippet}</p>
+            </Section>
+          )}
+
+          {(selectedTask.meetingMinutes || selectedTask.minutesError) && (
+            <Section title="会议纪要">
+              <MeetingMinutesCard
+                meetingMinutes={selectedTask.meetingMinutes}
+                markdownPath={selectedTask.minutesMarkdownPath}
+                transcriptionText={selectedTask.transcriptionText}
+                minutesGeneratedAt={selectedTask.minutesGeneratedAt}
+                minutesError={selectedTask.minutesError}
+              />
             </Section>
           )}
         </div>

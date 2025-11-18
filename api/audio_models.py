@@ -173,6 +173,26 @@ class LongAudioStatusData(BaseModel):
         description="ISO8601 timestamp when DashScope result URL is expected to expire"
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
+    transcription_text: Optional[str] = Field(
+        default=None,
+        description="Concatenated transcription text cached locally for meeting minutes"
+    )
+    meeting_minutes: Optional[MeetingMinutes] = Field(
+        default=None,
+        description="Structured meeting minutes generated from transcription"
+    )
+    minutes_markdown_path: Optional[str] = Field(
+        default=None,
+        description="Local path to generated meeting minutes Markdown file"
+    )
+    minutes_generated_at: Optional[str] = Field(
+        default=None,
+        description="ISO8601 timestamp when meeting minutes were generated"
+    )
+    minutes_error: Optional[str] = Field(
+        default=None,
+        description="Error message if meeting minutes generation failed"
+    )
 
 
 class LongAudioStatusResponse(BaseModel):

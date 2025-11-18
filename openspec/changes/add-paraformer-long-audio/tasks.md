@@ -17,6 +17,14 @@
 - [x] 2.3 新增可配置环境变量（模型名称、轮询间隔、超时、存储目录），落地在 `.env(.example)`、`audio_api.py`、`paraformer_long_audio.py`
 - [x] 2.4 编写结果落盘逻辑，将 DashScope 转写 JSON 保存至 `uploads/audios/long/{timestamp}_long_{dashscope_task_id}/`，并同时缓存源音频
 - [x] 2.5 统一长/短音频本地存储命名与目录结构（短音频落盘 `uploads/audios/short/{timestamp}_short_{task_id}`，并缓存结果 JSON / Markdown 路径）
+- [ ] 2.6 引入 PostgreSQL 单表持久化（`long_audio_tasks`）
+  - [ ] 2.6.1 通过 `.env` (`DATABASE_URL`) + `db/database.py` 建立 psycopg3 async 连接工厂
+  - [ ] 2.6.2 定义 `long_audio_tasks` 表结构（task_id/dashscope_task_id/status/model/file_urls/jsonb results/TTL timestamps）并创建索引
+  - [ ] 2.6.3 提交/轮询 API 改为读写数据库，淘汰内存 `TaskStore`，保持字段兼容
+- [ ] 2.7 复用会议纪要生成逻辑（短/长音频共用）
+  - [ ] 2.7.1 抽象 `MeetingMinutesService`（或等价拆分）以便独立生成 Markdown/JSON 纪要
+  - [ ] 2.7.2 长音频任务 SUCCEEDED 时调用纪要服务，保存 Markdown + 结构化结果到数据库字段
+  - [ ] 2.7.3 `LongAudioStatusResponse` 返回 `meeting_minutes`、`minutes_markdown_path`、`minutes_error` 等可选字段
 
 ## 3. 错误处理与限制
 - [x] 3.1 将 DashScope 错误码映射为相应的 HTTP 响应（如 InvalidFile、DownloadFailed）（submission/fetch 失败会返回 4xx/5xx 并记录日志）
@@ -41,7 +49,8 @@
 - [ ] 6.5 加强本地缓存/下载提示，为结果 JSON、音频副本和存储目录提供清晰的路径信息
 
 ## 7. 生产环境优化 (Roadmap)
-- [ ] 7.1 将长音频任务存储从内存迁移到 Redis/数据库，支持多实例/重启恢复
+--- [x] 7.1 将长音频任务存储迁移到 PostgreSQL 单表（`long_audio_tasks`），支持多实例/重启恢复
+- [ ] 7.2 长音频纪要生成为后台任务/重试策略（Roadmap）
 - [ ] 7.2 为长音频任务提供消息通知（Webhook / 邮件），便于大文件完成后提醒用户
 - [ ] 7.3 在 README/运维文档中补充生产部署建议（OSS 临时 URL、TTL 告警、任务清理策略）
 - [ ] 7.4 评估引入后台 worker 统一管理轮询，避免 API 实例阻塞，支持水平扩展
