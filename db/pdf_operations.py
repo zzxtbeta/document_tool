@@ -175,6 +175,7 @@ async def update_extraction_result(
                     page_image_urls = %s,
                     -- 提取核心字段
                     project_source = %s,
+                    project_name = %s,
                     project_contact = %s,
                     contact_info = %s,
                     project_leader = %s,
@@ -187,7 +188,7 @@ async def update_extraction_result(
                     competition_analysis = %s,
                     market_size = %s,
                     financial_status = %s,
-                    financing_status = %s,
+                    financing_history = %s,
                     keywords = %s,
                     completed_at = NOW(),
                     updated_at = NOW()
@@ -200,6 +201,7 @@ async def update_extraction_result(
                     page_image_urls,
                     # 核心字段
                     extracted_info.get("project_source"),
+                    extracted_info.get("project_name"),
                     extracted_info.get("project_contact"),
                     extracted_info.get("contact_info"),
                     extracted_info.get("project_leader"),
@@ -212,7 +214,7 @@ async def update_extraction_result(
                     extracted_info.get("competition_analysis"),
                     extracted_info.get("market_size"),
                     Jsonb(extracted_info.get("financial_status", {})),
-                    Jsonb(extracted_info.get("financing_status", {})),
+                    Jsonb(extracted_info.get("financing_history", {})),
                     extracted_info.get("keywords", []),
                     task_id,
                 ),

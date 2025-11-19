@@ -39,6 +39,7 @@ class PDFExtractionRequest(BaseModel):
 class ExtractionResult(BaseModel):
     """Structured extraction result from PDF"""
     project_source: str = Field(description="Source identifier (e.g., BP, pitch deck)")
+    project_name: Optional[str] = Field(default=None, description="Project name")
     company_name: str = Field(description="Company/project name")
     industry: str = Field(description="Industry category")
     founding_year: Optional[int] = Field(default=None, description="Company founding year")
@@ -63,9 +64,14 @@ class ExtractionResult(BaseModel):
         description="Target market and customer segments"
     )
     
-    financing_history: Optional[str] = Field(
+    financing_history: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Past financing rounds and investors"
+        description="Financing history (rounds, amounts, investors)"
+    )
+    
+    financial_status: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Financial status (current and future)"
     )
     
     funding_needs: Optional[str] = Field(
@@ -168,6 +174,10 @@ class TaskStatusData(BaseModel):
     project_leader: Optional[str] = Field(
         default=None,
         description="Project leader name"
+    )
+    project_name: Optional[str] = Field(
+        default=None,
+        description="Project name"
     )
     created_at: Optional[str] = Field(
         default=None,

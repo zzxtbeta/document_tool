@@ -30,7 +30,18 @@
     "current": "当前财务状况（营收、利润、用户数、增长率等）",
     "future": "未来1-3年的财务规划或预测"
   },
-  "financing_status": "已完成的融资轮次、金额、投资方，以及本轮融资需求",
+  "financing_history": {
+    "completed_rounds": [
+      {
+        "round": "融资轮次（如种子轮、A轮）",
+        "amount": "融资金额",
+        "investors": ["投资方1", "投资方2"]
+      }
+    ],
+    "current_funding_need": "本轮融资需求",
+    "funding_use": ["资金用途1", "资金用途2"]
+  },
+  "project_name": "项目名称或产品名称",
   "keywords": ["关键词1", "关键词2", "关键词3", "..."]
 }
 ```

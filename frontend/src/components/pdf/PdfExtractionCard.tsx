@@ -172,18 +172,18 @@ export const PdfExtractionCard = ({
       )}
 
       {/* 融资信息 */}
-      {extractionResult.financing_status && (
+      {extractionResult.financing_history && (
         <section className="rounded-lg border border-rose-100 bg-rose-50/60 p-4 space-y-3">
           <h5 className="text-sm font-semibold text-rose-900 border-b border-rose-200 pb-2">
             融资信息
           </h5>
           
-          {extractionResult.financing_status.completed_rounds && 
-           extractionResult.financing_status.completed_rounds.length > 0 && (
+          {extractionResult.financing_history.completed_rounds && 
+           extractionResult.financing_history.completed_rounds.length > 0 && (
             <div>
               <p className="text-xs text-rose-500 mb-2">已完成轮次</p>
               <div className="space-y-2">
-                {extractionResult.financing_status.completed_rounds.map((round, index) => (
+                {extractionResult.financing_history.completed_rounds.map((round: any, index: number) => (
                   <div key={index} className="bg-white/80 rounded p-2">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-sm font-semibold text-rose-900">{round.round}</span>
@@ -198,39 +198,39 @@ export const PdfExtractionCard = ({
             </div>
           )}
 
-          {extractionResult.financing_status.current_round && (
+          {extractionResult.financing_history.current_round && (
             <div>
               <p className="text-xs text-rose-500 mb-1">当前融资</p>
               <div className="bg-white/80 rounded p-2 space-y-1">
                 <p className="text-sm text-rose-800">
                   <span className="font-semibold">轮次：</span>
-                  {extractionResult.financing_status.current_round.round}
+                  {extractionResult.financing_history.current_round.round}
                 </p>
                 <p className="text-sm text-rose-800">
                   <span className="font-semibold">目标金额：</span>
-                  {extractionResult.financing_status.current_round.target_amount}
+                  {extractionResult.financing_history.current_round.target_amount}
                 </p>
                 <p className="text-sm text-rose-800">
                   <span className="font-semibold">状态：</span>
-                  {extractionResult.financing_status.current_round.status}
+                  {extractionResult.financing_history.current_round.status}
                 </p>
               </div>
             </div>
           )}
 
-          {extractionResult.financing_status.funding_need && (
+          {extractionResult.financing_history.funding_need && (
             <div>
               <p className="text-xs text-rose-500 mb-1">资金需求</p>
-              <p className="text-sm text-rose-800">{extractionResult.financing_status.funding_need}</p>
+              <p className="text-sm text-rose-800">{extractionResult.financing_history.funding_need}</p>
             </div>
           )}
 
-          {extractionResult.financing_status.use_of_funds && 
-           extractionResult.financing_status.use_of_funds.length > 0 && (
+          {extractionResult.financing_history.use_of_funds && 
+           extractionResult.financing_history.use_of_funds.length > 0 && (
             <div>
               <p className="text-xs text-rose-500 mb-1">资金用途</p>
               <ul className="text-sm list-disc pl-4 space-y-1">
-                {extractionResult.financing_status.use_of_funds.map((use, index) => (
+                {extractionResult.financing_history.use_of_funds.map((use: string, index: number) => (
                   <li key={index} className="text-rose-800">{use}</li>
                 ))}
               </ul>

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS pdf_extraction_tasks (
     
     -- ========== 提取的结构化信息 (核心字段) ==========
     project_source TEXT,
+    project_name TEXT,
     project_contact TEXT,
     contact_info TEXT,
     project_leader TEXT,
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS pdf_extraction_tasks (
     competition_analysis TEXT,
     market_size TEXT,
     financial_status JSONB,
-    financing_status TEXT,
+    financing_history JSONB,
     keywords TEXT[],
     
     -- ========== 完整提取结果 ==========
@@ -72,6 +73,7 @@ COMMENT ON COLUMN pdf_extraction_tasks.pdf_object_key IS 'OSS 对象键';
 COMMENT ON COLUMN pdf_extraction_tasks.page_count IS 'PDF 页数';
 COMMENT ON COLUMN pdf_extraction_tasks.page_image_urls IS 'PDF 页面图片 URL 列表';
 COMMENT ON COLUMN pdf_extraction_tasks.project_source IS '项目来源';
+COMMENT ON COLUMN pdf_extraction_tasks.project_name IS '项目名称';
 COMMENT ON COLUMN pdf_extraction_tasks.project_contact IS '项目联系人';
 COMMENT ON COLUMN pdf_extraction_tasks.contact_info IS '联系方式';
 COMMENT ON COLUMN pdf_extraction_tasks.project_leader IS '项目负责人';
@@ -83,8 +85,8 @@ COMMENT ON COLUMN pdf_extraction_tasks.core_product IS '核心产品描述';
 COMMENT ON COLUMN pdf_extraction_tasks.core_technology IS '核心技术描述';
 COMMENT ON COLUMN pdf_extraction_tasks.competition_analysis IS '竞争情况分析';
 COMMENT ON COLUMN pdf_extraction_tasks.market_size IS '市场空间描述';
-COMMENT ON COLUMN pdf_extraction_tasks.financial_status IS '财务状况 JSON 对象 (current/future)';
-COMMENT ON COLUMN pdf_extraction_tasks.financing_status IS '融资情况描述';
+COMMENT ON COLUMN pdf_extraction_tasks.financial_status IS '财务状况 JSON 对象 (current/future 收入/支出等)';
+COMMENT ON COLUMN pdf_extraction_tasks.financing_history IS '融资历史 JSON 对象 (轮次/金额/投资方等，结构示例: {"round": "A轮", "amount": 1000000, "investors": ["投资方1", "投资方2"]})';
 COMMENT ON COLUMN pdf_extraction_tasks.keywords IS '关键词数组';
 COMMENT ON COLUMN pdf_extraction_tasks.extracted_info IS '完整提取结果 JSON';
 COMMENT ON COLUMN pdf_extraction_tasks.extracted_info_url IS '提取结果 JSON 的 OSS URL';

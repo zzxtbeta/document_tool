@@ -23,8 +23,8 @@ export interface CurrentFunding {
   status: string;
 }
 
-// 融资状态
-export interface FinancingStatus {
+// 融资信息
+export interface FinancingInfo {
   completed_rounds?: FundingRound[];
   current_round?: CurrentFunding;
   funding_need?: string;
@@ -51,7 +51,8 @@ export interface ExtractionResult {
   competition_analysis?: string;
   market_size?: string;
   financial_status?: FinancialStatus;
-  financing_status?: FinancingStatus;
+  financing_history?: FinancingInfo;
+  project_name?: string;
   keywords?: string[];
   project_source?: string;
 }
@@ -75,6 +76,7 @@ export interface PdfTask {
   extracted_info_object_key?: string;
   company_name?: string;
   industry?: string;
+  project_name?: string;
   project_contact?: string;
   project_leader?: string;
 }
