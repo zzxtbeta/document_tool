@@ -2,6 +2,67 @@
 
 本文档列出实现 PDF 商业计划书智能解析功能的所有任务,按优先级和依赖关系组织。
 
+## 当前迭代 (Phase 4): 系统集成接口 (2025-11-19) ✅ 完成
+
+### 4.1 Qwen VL 调用方式优化
+
+- [x] **保持 Base64 调用方式** _(用户决定)_
+  - 文件: `pipelines/pdf_extraction_service.py`
+  - 保持现有的 Base64 编码方式
+  - 原因: 稳定性已验证，无需改动
+
+### 4.2 新增系统集成接口 ✅
+
+- [x] **创建独立处理接口** _(完成: `api/pdf/pdf_routes.py`)_
+  - 文件: `api/pdf/pdf_routes.py`
+  - `POST /api/v1/pdf/process` 端点 ✓
+  - `GET /api/v1/pdf/process/{task_id}` 端点 ✓
+  - `GET /api/v1/pdf/process` 端点 ✓
+  - 接收 JSON body 中的 `oss_key_list` (批量)
+  - 返回详细的任务信息
+  - 完整的参数验证和错误处理
+
+- [x] **新增业务逻辑方法** _(完成: `pipelines/pdf_extraction_service.py`)_
+  - 添加 `submit_extraction_from_oss()` 方法 ✓
+  - 处理批量 oss_key_list ✓
+  - 创建任务记录并提交到队列 ✓
+  - 返回任务信息列表 ✓
+
+### 4.3 数据库扩展 ⏳
+
+- [ ] **添加新字段支持** _(待后续迭代)_
+  - `file_id` 字段 (用于关联上传系统)
+  - `financing_history` 字段 (JSONB)
+  - `project_name` 字段 (TEXT)
+  - 注: 当前实现暂不使用这些字段，接口已支持参数传递
+
+- [x] **更新数据库操作** _(部分完成: `db/pdf_operations.py`)_
+  - 支持 `file_id` 参数（暂未存储）✓
+  - 保持向后兼容 ✓
+
+### 4.4 LLM 提示词更新 ✅
+
+- [x] **提取 Prompt 已支持** _(现有: `pipelines/prompts/bp_extraction.txt`)_
+  - 已包含 `project_name` 字段 ✓
+  - 已包含 `financing_history` 结构 ✓
+  - 字段说明和示例完整 ✓
+
+### 4.5 错误处理和重试机制 ✅
+
+- [x] **规范化错误处理** _(完成: `api/pdf/pdf_routes.py`)_
+  - 详细的错误消息 ✓
+  - 支持可配置重试次数 (0-3) ✓
+  - 输入验证和错误返回 ✓
+
+### 4.6 集成文档
+
+- [ ] **编写集成文档** _(待后续)_
+  - API 参数说明
+  - 集成步骤
+  - 使用示例 (cURL、Python)
+  - 错误处理指南
+  - 监控和调试
+
 ## 阶段 1: MVP 后端核心功能 (2.5 周)
 
 ### 1.1 数据库设计 (1 天)

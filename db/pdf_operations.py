@@ -25,20 +25,22 @@ async def create_pdf_extraction_task(
     oss_object_prefix: str,
     page_count: Optional[int] = None,
     model: str = "qwen3-vl-flash",
+    file_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     创建 PDF 提取任务记录
     
     Args:
-        task_id: 任务 ID (UUID)
-        pdf_url: OSS PDF 文件 URL
-        pdf_object_key: OSS object key
+        task_id: 任务 ID
+        pdf_url: PDF 文件 URL
+        pdf_object_key: OSS 对象键
         user_id: 用户 ID
         project_id: 项目 ID
         source_filename: 原始文件名
         oss_object_prefix: OSS 对象前缀
-        page_count: PDF 页数
+        page_count: 页数
         model: 使用的模型
+        file_id: 文件 ID（用于关联上传系统，暂未使用）
         
     Returns:
         创建的任务记录

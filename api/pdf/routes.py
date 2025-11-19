@@ -26,7 +26,7 @@ from api.pdf.models import (
     BatchUploadResponse
 )
 from pipelines.pdf_extraction_service import PDFExtractionService
-from pipelines.tasks import get_queue_status
+from pipelines.queue_tasks import get_queue_status
 from db.pdf_operations import list_pdf_extraction_tasks, get_pdf_extraction_task, count_tasks_by_status
 
 logger = logging.getLogger(__name__)

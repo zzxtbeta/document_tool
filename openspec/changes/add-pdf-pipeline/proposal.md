@@ -1,10 +1,11 @@
 # 提案: PDF 商业计划书智能解析管道
 
 **日期**: 2025-11-18  
-**状态**: ✅ 已实现  
+**状态**: ✅ 已完成 - 系统集成接口  
 **负责人**: AI Assistant  
 **优先级**: P1  
-**完成日期**: 2025-11-19
+**上次完成日期**: 2025-11-19  
+**当前迭代**: 2025-11-19 - 完整功能交付
 
 ## 概述
 
@@ -98,7 +99,8 @@
 | competition_analysis | string | 竞争情况分析 | 否 |
 | market_size | string | 市场空间描述 | 否 |
 | financial_status | object | 财务情况（当前+未来） | 否 |
-| financing_status | string | 融资情况描述 | 否 |
+| financing_history | object | 融资历史（轮次、金额、投资方） | 否 |
+| project_name | string | 项目名称 | 否 |
 | keywords | array[string] | 关键词（技术、团队、融资等） | 是 |
 
 #### 行业分类候选列表（示例）
@@ -124,7 +126,7 @@
 
 ### 3. API 设计
 
-#### 提交 PDF 解析任务
+#### A. 上传接口（现有）
 ```http
 POST /api/v1/pdf/extract
 Content-Type: multipart/form-data
@@ -149,6 +151,54 @@ Response 202:
   "metadata": {
     "timestamp": "2025-11-18T10:30:00Z",
     "estimated_time": "30-60s"
+  }
+}
+```
+
+#### B. 处理接口（新增 - 用于系统集成）
+```http
+POST /api/v1/pdf/process
+Content-Type: application/x-www-form-urlencoded
+
+{
+  "oss_key_list": [
+    "projects/proj_123/files/bp1.pdf",
+    "projects/proj_123/files/bp2.pdf"
+  ],
+  "project_id": "proj_123",
+  "user_id": "user_789",
+  "file_id_list": ["file_456", "file_789"],
+  "high_resolution": false,
+  "retry_count": 1
+}
+
+Response 200:
+{
+  "success": true,
+  "data": {
+    "total": 2,
+    "submitted": 2,
+    "failed": 0,
+    "tasks": [
+      {
+        "task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "oss_key": "projects/proj_123/files/bp1.pdf",
+        "file_id": "file_456",
+        "status": "pending"
+      },
+      {
+        "task_id": "550e8400-e29b-41d4-a716-446655440002",
+        "oss_key": "projects/proj_123/files/bp2.pdf",
+        "file_id": "file_789",
+        "status": "pending"
+      }
+    ],
+    "estimated_time": 90
+  },
+  "error": null,
+  "metadata": {
+    "timestamp": "2025-11-19T20:56:00Z",
+    "request_id": "req_550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
@@ -247,7 +297,8 @@ CREATE TABLE pdf_extraction_tasks (
     competition_analysis TEXT,
     market_size TEXT,
     financial_status JSONB,  -- {current: {}, future: {}}
-    financing_status TEXT,
+    financing_history JSONB,  -- {completed_rounds: [], current_funding_need: "", funding_use: []}
+    project_name TEXT,
     keywords TEXT[],
     
     -- 完整提取结果
@@ -329,6 +380,7 @@ EXTRACTION_PROMPT = """
 
 提取字段：
 {
+  "project_name": "项目名称或产品名称",
   "project_contact": "项目联系人/创始人姓名",
   "contact_info": "联系方式（电话或邮箱）",
   "project_leader": "项目负责人（如果与联系人不同）",
@@ -346,7 +398,13 @@ EXTRACTION_PROMPT = """
     "current": "当前财务状况（营收、利润、用户量等）",
     "future": "未来财务计划或预测"
   },
-  "financing_status": "融资情况（已融轮次、金额、投资方等）",
+  "financing_history": {
+    "completed_rounds": [
+      {"round": "融资轮次", "amount": "融资金额", "investors": ["投资方1", "投资方2"]}
+    ],
+    "current_funding_need": "本轮融资需求",
+    "funding_use": ["资金用途1", "资金用途2"]
+  },
   "keywords": ["关键词1", "关键词2", "..."]（提取 5-10 个关键词，涵盖技术、团队背景、融资机构等）
 }
 
@@ -354,9 +412,10 @@ EXTRACTION_PROMPT = """
 1. 所有字符串字段请使用引号包裹
 2. 行业必须从给定列表中选择，如无匹配选"其他"
 3. core_team 至少提取 2-3 个核心成员
-4. keywords 至少提取 5 个，包括技术、行业、融资相关的关键词
-5. 数字金额请保留原始格式（如"500万元"、"Pre-A轮"）
-6. 如果内容分布在多页，请综合所有页面信息
+4. financing_history 中的 completed_rounds 是数组，包含已完成的融资轮次
+5. keywords 至少提取 5 个，包括技术、行业、融资相关的关键词
+6. 数字金额请保留原始格式（如"500万元"、"Pre-A轮"）
+7. 如果内容分布在多页，请综合所有页面信息
 
 请输出标准 JSON，不要包含任何其他解释文字。
 """
@@ -568,3 +627,64 @@ EXTRACTION_PROMPT = """
 - ✅ 数据验证严格（文件类型、大小、页数）
 - ✅ 支持分布式部署（多 Worker）
 - ✅ 监控和可观测性（详细日志）
+
+## Phase 4 实现总结 (2025-11-19)
+
+### ✅ 新增系统集成接口
+
+1. **独立处理接口** - `api/pdf/pdf_routes.py`
+   - `POST /api/v1/pdf/process` - 提交批量处理任务
+     - 接收 JSON body 中的 `oss_key_list`（OSS 文件路径列表）
+     - 支持 `project_id`, `user_id`, `file_id_list` 关联
+     - 支持 `high_resolution` 和 `retry_count` 配置
+     - 返回 task_id 列表和预计处理时间
+   
+   - `GET /api/v1/pdf/process/{task_id}` - 查询任务状态和结果
+     - 返回完整的 `extracted_info`（提取的结构化信息）
+     - 返回 `extracted_info_url`（OSS 中的 JSON 文件）
+     - 返回 `download_urls`（JSON 和原始 PDF 下载链接）
+   
+   - `GET /api/v1/pdf/process` - 列表查询
+     - 支持按 `user_id`, `project_id`, `status` 筛选
+     - 支持分页（page, page_size）
+
+2. **业务逻辑方法** - `pipelines/pdf_extraction_service.py`
+   - `submit_extraction_from_oss()` 方法
+     - 处理批量 oss_key_list
+     - 为每个文件创建任务记录
+     - 提交到 Huey 队列异步处理
+     - 返回任务信息列表
+
+3. **导入同步**
+   - `pipelines/pdf_extraction_service.py`: `tasks.py` → `queue_tasks.py`
+   - `api/pdf/routes.py`: `tasks.py` → `queue_tasks.py`
+
+### 📋 关键特性
+
+- **完整的功能块**: 提交、查询、列表一体化
+- **灵活的参数设计**: 支持与上传系统无缝集成
+- **详细的错误处理**: 完整的输入验证和错误消息
+- **向后兼容**: 不影响现有的上传接口
+- **生产级别**: 支持批量处理、重试、分布式部署
+
+### 🎯 使用示例
+
+**提交批量处理**:
+```json
+POST /api/v1/pdf/process
+{
+  "oss_key_list": ["prod/bronze/userUploads/defaultProject/pdf/.../file.pdf"],
+  "project_id": "proj_123",
+  "user_id": "zzxt",
+  "file_id_list": ["111222"],
+  "high_resolution": false,
+  "retry_count": 1
+}
+```
+
+**查询结果**:
+```
+GET /api/v1/pdf/process/7b39129e-d785-44d0-bbfc-55a467283aa5
+```
+
+返回完整的提取结果、下载链接等。

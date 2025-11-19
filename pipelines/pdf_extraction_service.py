@@ -119,11 +119,82 @@ class PDFExtractionService:
         logger.info(f"[PDF Extract] Created task record in DB: {task_id}")
         
         # 5. 提交到 Huey 任务队列处理
-        from pipelines.tasks import pdf_extract_process_task
+        from pipelines.queue_tasks import pdf_extract_process_task
         pdf_extract_process_task(task_id, high_resolution)
         logger.info(f"[PDF Extract] Task submitted to Huey queue: {task_id} (high_resolution={high_resolution})")
         
         return task_id
+    
+    async def submit_extraction_from_oss(
+        self,
+        oss_key_list: List[str],
+        project_id: str,
+        user_id: str,
+        file_id_list: Optional[List[str]] = None,
+        high_resolution: bool = False,
+        retry_count: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """
+        从 OSS 提交 PDF 提取任务（用于系统集成）
+        
+        Args:
+            oss_key_list: OSS 文件路径列表
+            project_id: 项目 ID
+            user_id: 用户 ID
+            file_id_list: 文件 ID 列表（可选，用于关联上传系统）
+            high_resolution: 是否启用高分辨率模式
+            retry_count: 失败重试次数
+            
+        Returns:
+            List[Dict]: 任务信息列表，每个包含 task_id, oss_key, file_id, status
+        """
+        tasks = []
+        
+        for idx, oss_key in enumerate(oss_key_list):
+            try:
+                # 生成任务 ID
+                task_id = str(uuid.uuid4())
+                
+                # 获取文件 ID（如果提供）
+                file_id = file_id_list[idx] if file_id_list else None
+                
+                # 从 OSS key 提取文件名
+                source_filename = oss_key.split('/')[-1]
+                
+                # 创建数据库记录
+                await create_pdf_extraction_task(
+                    task_id=task_id,
+                    pdf_url=self.storage.build_public_url(oss_key),
+                    pdf_object_key=oss_key,
+                    user_id=user_id,
+                    project_id=project_id,
+                    source_filename=source_filename,
+                    oss_object_prefix=oss_key.rsplit('/', 1)[0],  # 提取目录前缀
+                    page_count=None,  # 稍后在处理时获取
+                    file_id=file_id,  # 关联上传系统的文件 ID
+                )
+                
+                logger.info(f"[PDF Extract] Created task record: {task_id} (oss_key={oss_key})")
+                
+                # 提交到 Huey 队列
+                from pipelines.queue_tasks import pdf_extract_process_task
+                pdf_extract_process_task(task_id, high_resolution)
+                logger.info(f"[PDF Extract] Task submitted to queue: {task_id}")
+                
+                # 添加到返回列表
+                tasks.append({
+                    "task_id": task_id,
+                    "oss_key": oss_key,
+                    "file_id": file_id,
+                    "status": "pending"
+                })
+                
+            except Exception as e:
+                logger.error(f"[PDF Extract] Failed to submit task for {oss_key}: {e}", exc_info=True)
+                # 继续处理其他文件，不中断
+                raise
+        
+        return tasks
     
     async def process_pdf(self, task_id: str, high_resolution: bool = False):
         """

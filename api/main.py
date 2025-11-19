@@ -279,9 +279,10 @@ except Exception as e:
 
 # Import and register PDF extraction routes
 try:
-    from api.pdf import pdf_router
+    from api.pdf import pdf_router, pdf_process_router
     app.include_router(pdf_router)
-    logger.info("PDF extraction routes registered")
+    app.include_router(pdf_process_router)
+    logger.info("PDF extraction routes registered (upload + process)")
 except Exception as e:
     logger.warning(f"Failed to register PDF routes: {e}")
 
