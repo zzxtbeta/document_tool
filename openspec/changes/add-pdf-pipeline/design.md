@@ -105,87 +105,72 @@
 
 ## 核心组件设计
 
-### 0. AsyncTaskQueue (新增)
+### 0. Huey 任务队列配置 (新增)
 
-**职责**: 管理异步 PDF 处理任务队列
+**职责**: 使用 Huey 框架管理分布式 PDF 处理任务队列
 
 ```python
-import asyncio
-from typing import Dict, Optional
-from enum import Enum
+# pipelines/tasks.py
+from huey import RedisHuey
+import os
 
-class TaskPriority(Enum):
-    HIGH = 1
-    NORMAL = 2
-    LOW = 3
+# 初始化 Huey
+huey = RedisHuey(
+    name=os.getenv('HUEY_QUEUE_NAME', 'pdf-tasks'),
+    url=os.getenv('HUEY_REDIS_URL', 'redis://localhost:6379'),
+    immediate=os.getenv('HUEY_IMMEDIATE', 'false').lower() == 'true'
+)
 
-class AsyncTaskQueue:
-    """异步任务队列管理器"""
+@huey.task()
+def process_pdf_task(task_id: str):
+    """
+    异步处理 PDF 任务
     
-    def __init__(self):
-        self.queue = asyncio.PriorityQueue(maxsize=100)  # 可配置
-        self.active_tasks: Dict[str, asyncio.Task] = {}
-        self.max_concurrent = int(os.getenv('PDF_MAX_CONCURRENT_TASKS', 5))
-        self._workers = []
+    Args:
+        task_id: 任务 ID
         
-    async def start(self):
-        """启动工作线程"""
-        for i in range(self.max_concurrent):
-            worker = asyncio.create_task(self._worker(f"worker-{i}"))
-            self._workers.append(worker)
-            
-    async def submit_task(
-        self,
-        task_id: str,
-        priority: TaskPriority = TaskPriority.NORMAL
-    ):
-        """
-        提交任务到队列
-        
-        Args:
-            task_id: 任务ID
-            priority: 任务优先级
-        """
-        await self.queue.put((priority.value, task_id))
-        logger.info(f"Task {task_id} submitted with priority {priority.name}")
-        
-    async def _worker(self, name: str):
-        """工作线程"""
-        while True:
-            try:
-                priority, task_id = await self.queue.get()
-                logger.info(f"{name} processing task {task_id}")
-                
-                # 处理任务
-                task = asyncio.create_task(
-                    self._process_pdf_task(task_id)
-                )
-                self.active_tasks[task_id] = task
-                
-                try:
-                    await task
-                finally:
-                    self.active_tasks.pop(task_id, None)
-                    self.queue.task_done()
-                    
-            except Exception as e:
-                logger.error(f"{name} error: {e}")
-                
-    async def _process_pdf_task(self, task_id: str):
-        """处理单个 PDF 任务"""
-        service = PDFExtractionService()
-        await service.process_pdf(task_id)
-        
-    def get_queue_size(self) -> int:
-        """获取队列大小"""
-        return self.queue.qsize()
-        
-    def get_active_tasks(self) -> list:
-        """获取正在处理的任务"""
-        return list(self.active_tasks.keys())
+    Returns:
+        处理结果
+    """
+    from pipelines.pdf_extraction_service import PDFExtractionService
+    
+    service = PDFExtractionService()
+    try:
+        service.process_pdf(task_id)
+        logger.info(f"Task {task_id} completed successfully")
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}", exc_info=True)
+        raise  # Huey 会自动重试
 
-# 全局队列实例
-task_queue = AsyncTaskQueue()
+# FastAPI 中的使用
+# api/pdf/routes.py
+from pipelines.tasks import process_pdf_task
+
+async def submit_extraction(...):
+    # ... 上传 PDF、入库等操作 ...
+    
+    # 提交任务到 Huey 队列
+    process_pdf_task(task_id)  # 异步执行
+    
+    return task_id
+```
+
+**特点**：
+- ✅ 任务持久化到 Redis
+- ✅ 支持独立 worker 进程（可多台部署）
+- ✅ 内置重试机制（失败自动重试 3 次）
+- ✅ 内置死信队列（失败任务保留）
+- ✅ 支持任务优先级
+- ✅ 支持定时任务（cron）
+- ✅ 生产级别稳定性
+
+**启动方式**：
+```bash
+# 启动 Huey worker（5 个线程）
+huey_consumer pipelines.tasks.huey -w 5 -k thread
+
+# 或使用进程（多核利用）
+huey_consumer pipelines.tasks.huey -w 5 -k process
 ```
 
 ### 1. PDFExtractionService

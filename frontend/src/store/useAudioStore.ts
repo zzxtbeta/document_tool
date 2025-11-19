@@ -9,7 +9,6 @@ import type {
   LongAudioStatus,
   LongAudioStatusResponse,
   LongAudioStoreState,
-  DashScopeTask,
   TaskFilters,
 } from '../types/audio';
 

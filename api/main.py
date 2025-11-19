@@ -182,15 +182,7 @@ async def lifespan(app: FastAPI):
     config.ensure_directories()
     logger.info(f"📁 Upload directory: {config.UPLOAD_DIR}")
     logger.info(f"📁 Output directory: {config.OUTPUT_DIR}")
-    
-    # Start PDF task queue
-    try:
-        from pipelines.async_task_queue import get_task_queue
-        pdf_queue = get_task_queue()
-        await pdf_queue.start()
-        logger.info("✅ PDF extraction queue started")
-    except Exception as e:
-        logger.warning(f"Failed to start PDF queue: {e}")
+    logger.info("✅ PDF extraction using Huey task queue")
     
     # Start cleanup task
     async def cleanup_loop():
@@ -205,15 +197,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("🛑 Shutting down API")
     cleanup_task.cancel()
-    
-    # Stop PDF task queue
-    try:
-        from pipelines.async_task_queue import get_task_queue
-        pdf_queue = get_task_queue()
-        await pdf_queue.stop()
-        logger.info("✅ PDF extraction queue stopped")
-    except Exception as e:
-        logger.warning(f"Failed to stop PDF queue: {e}")
 
 
 # =============================================================================

@@ -72,7 +72,7 @@ export const PdfQueueStatus: React.FC = () => {
         </div>
         <div className="text-center">
           <div className="text-2xl font-bold text-accent-blue">
-            {queueStatus.active_tasks}
+            {queueStatus.active_tasks + queueStatus.pending_tasks}
           </div>
           <div className="text-xs text-primary-500 mt-1">活跃任务</div>
         </div>

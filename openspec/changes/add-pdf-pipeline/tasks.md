@@ -2,7 +2,7 @@
 
 本文档列出实现 PDF 商业计划书智能解析功能的所有任务,按优先级和依赖关系组织。
 
-## 阶段 1: MVP 后端核心功能 (2 周)
+## 阶段 1: MVP 后端核心功能 (2.5 周)
 
 ### 1.1 数据库设计 (1 天)
 
@@ -120,30 +120,42 @@
   - 测试 URL 生成
   - 测试权限控制
 
-### 1.5 异步队列实现 (2 天)
+### 1.5 Huey 任务队列实现 (2 天)
 
-- [x] **实现 AsyncTaskQueue** _(已完成: `pipelines/async_task_queue.py`)_
-  - 文件: `pipelines/async_task_queue.py`
-  - `AsyncTaskQueue` 类
-  - `submit_task()` - 提交任务到队列
-  - `_worker()` - 工作线程处理逻辑
-  - `get_queue_size()` - 获取队列状态
-  - `get_active_tasks()` - 获取活跃任务
-  - 优先级支持 (HIGH/NORMAL/LOW)
-  - 并发控制 (从环境变量读取)
+- [ ] **配置 Huey 任务队列** _(新增: `pipelines/tasks.py`)_
+  - 文件: `pipelines/tasks.py`
+  - 初始化 RedisHuey 实例
+  - 配置 Redis 连接（含密码）
+  - 配置 worker 参数（线程/进程数）
+  - 配置重试策略（3 次重试）
 
-- [x] **集成队列到 FastAPI** _(已在 `api/main.py` 的 lifespan 中启动/停止队列)_
-  - 文件: `api/main.py`
-  - `@app.on_event("startup")` 启动队列
-  - `@app.on_event("shutdown")` 关闭队列
-  - 添加健康检查端点
+- [ ] **实现 PDF 处理任务** _(新增: `pipelines/tasks.py`)_
+  - `@huey.task()` 装饰器
+  - `process_pdf_task(task_id)` - 异步处理 PDF
+  - 错误处理和日志记录
+  - 支持任务优先级
 
-- [ ] **测试异步队列** _(测试用例缺失)_
-  - 文件: `tests/test_async_queue.py`
+- [ ] **更新 PDFExtractionService** _(修改: `pipelines/pdf_extraction_service.py`)_
+  - 移除 `submit_extraction()` 中的异步队列逻辑
+  - 改为调用 `process_pdf_task.delay(task_id)`
+  - 保持 `process_pdf()` 同步执行（由 Huey worker 调用）
+
+- [ ] **更新 API 路由** _(修改: `api/pdf/routes.py`)_
+  - 导入 `process_pdf_task` 从 `pipelines.tasks`
+  - 在 `submit_extraction()` 后调用 `process_pdf_task(task_id)`
+  - 移除 asyncio 队列相关代码
+
+- [ ] **启动脚本** _(新增: `scripts/start_huey_worker.sh`)_
+  - 启动 Huey worker 进程
+  - 配置 worker 数量和类型
+  - 日志输出配置
+
+- [ ] **测试 Huey 集成** _(测试用例缺失)_
+  - 文件: `tests/test_huey_tasks.py`
   - 测试任务提交
-  - 测试并发控制
-  - 测试优先级队列
-  - 测试异常处理
+  - 测试任务执行
+  - 测试重试机制
+  - 测试错误处理
 
 ### 1.6 核心服务实现 (3 天)
 

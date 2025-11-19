@@ -308,3 +308,23 @@ async def count_tasks_by_status(status: str) -> int:
             )
             row = await cur.fetchone()
             return row[0] if row else 0
+
+
+async def delete_pdf_extraction_task(task_id: str) -> bool:
+    """
+    删除 PDF 提取任务记录
+    
+    Args:
+        task_id: 任务 ID
+        
+    Returns:
+        是否删除成功
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM pdf_extraction_tasks WHERE task_id = %s",
+                (task_id,)
+            )
+            return cur.rowcount > 0

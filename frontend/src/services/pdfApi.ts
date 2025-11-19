@@ -100,6 +100,13 @@ export const pdfApi = {
   getDownloadUrl(taskId: string, fileType: 'json' | 'pdf'): string {
     return `${API_BASE}/download/${taskId}/${fileType}`;
   },
+
+  /**
+   * 删除任务及其本地文件
+   */
+  async deleteTask(taskId: string): Promise<void> {
+    await axios.delete(`${API_BASE}/extract/${taskId}`);
+  },
 };
 
 // 导出简化的 API 方法

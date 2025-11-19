@@ -187,7 +187,7 @@ const AudioContent: React.FC<{
 
     // PDF 内容组件
     const PdfContent = () => {
-      const { isUploading, selectedResult, selectedTask, error, clearError } = usePdfStore();
+      const { selectedResult, selectedTask, error, clearError } = usePdfStore();
 
       return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

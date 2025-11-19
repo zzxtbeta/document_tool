@@ -191,9 +191,14 @@ class TaskSummary(BaseModel):
 class QueueStatus(BaseModel):
     """Processing queue status"""
     is_running: bool = Field(description="Whether queue is active")
+    queue_length: int = Field(description="Current queue length")
+    active_tasks: int = Field(description="Number of tasks currently processing")
+    completed_tasks: int = Field(description="Number of tasks completed (lifetime)")
     active_workers: int = Field(description="Number of active workers")
     pending_tasks: int = Field(description="Number of pending tasks")
     queue_capacity: int = Field(description="Maximum queue size")
+    max_workers: int = Field(description="Configured maximum worker count")
+    max_queue_size: int = Field(description="Configured queue capacity")
 
 
 # =============================================================================

@@ -19,6 +19,10 @@ tqdm>=4.66.0                # Progress bar for batch processing
 pdf2image>=1.16.3           # Convert PDF pages to images
 pypdf>=3.17.0               # PDF validation and metadata extraction
 
+# Task queue dependencies
+redis>=4.5.0                # Redis client
+huey>=2.4.5                 # Lightweight task queue framework
+
 # FastAPI and web server
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0

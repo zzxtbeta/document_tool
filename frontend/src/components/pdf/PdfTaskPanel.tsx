@@ -33,9 +33,11 @@ export const PdfTaskPanel: React.FC = () => {
   const taskFilters = usePdfStore((state) => state.taskFilters);
   const loadTasks = usePdfStore((state) => state.loadTasks);
   const refreshTask = usePdfStore((state) => state.refreshTask);
+  const deleteTask = usePdfStore((state) => state.deleteTask);
   const setTaskFilters = usePdfStore((state) => state.setTaskFilters);
 
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState<PdfTask | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const hasFetchedRef = useRef(false);
   const pollIntervalRef = useRef<number | null>(null);
@@ -107,6 +109,21 @@ export const PdfTaskPanel: React.FC = () => {
   const formatTimestamp = (timestamp?: string) => {
     if (!timestamp) return '-';
     return new Date(timestamp).toLocaleString('zh-CN');
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!window.confirm('确定要删除此任务及其本地文件吗？此操作不可撤销。')) {
+      return;
+    }
+    
+    try {
+      setDeletingTaskId(taskId);
+      await deleteTask(taskId);
+    } catch (error) {
+      console.error('删除任务失败:', error);
+    } finally {
+      setDeletingTaskId(null);
+    }
   };
 
   return (
@@ -182,16 +199,16 @@ export const PdfTaskPanel: React.FC = () => {
                 </div>
                 {/* 显示受理单关键信息 */}
                 <div className="flex gap-4 flex-wrap">
-                  {(task as any).company_name && (
+                  {task.company_name && (
                     <span className="inline-flex items-center gap-1">
                       <span className="font-medium">🏭 公司:</span>
-                      <span className="text-primary-900">{(task as any).company_name}</span>
+                      <span className="text-primary-900">{task.company_name}</span>
                     </span>
                   )}
-                  {(task as any).industry && (
+                  {task.industry && (
                     <span className="inline-flex items-center gap-1">
                       <span className="font-medium">🏭 行业:</span>
-                      <span className="text-primary-900">{(task as any).industry}</span>
+                      <span className="text-primary-900">{task.industry}</span>
                     </span>
                   )}
                 </div>
@@ -229,6 +246,14 @@ export const PdfTaskPanel: React.FC = () => {
                   </button>
                 </>
               )}
+              <button
+                type="button"
+                onClick={() => handleDeleteTask(task.task_id)}
+                disabled={deletingTaskId === task.task_id}
+                className="text-sm px-3 py-1.5 rounded-lg border border-red-200 text-red-700 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deletingTaskId === task.task_id ? '删除中...' : '🗑️ 删除'}
+              </button>
             </div>
           </div>
         ))}

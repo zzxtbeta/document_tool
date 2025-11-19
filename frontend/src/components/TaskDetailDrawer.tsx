@@ -197,8 +197,8 @@ export const TaskDetailDrawer = () => {
                 try {
                   await cancelDashScopeTask(selectedTask.dashscopeTaskId);
                   await refreshLongTask(selectedTask.taskId);
-                } catch (error: any) {
-                  const errorMsg = error?.response?.data?.detail || error?.message || '取消失败';
+                } catch (error: unknown) {
+                  const errorMsg = (error as { response?: { data?: { detail?: string } }; message?: string })?.response?.data?.detail || (error as { message?: string })?.message || '取消失败';
                   setCancelError(errorMsg);
                   console.error('取消任务失败:', error);
                 } finally {

@@ -29,6 +29,7 @@ interface PdfState {
   selectTask: (task: PdfTask) => Promise<void>;
   loadQueueStatus: () => Promise<void>;
   downloadFile: (taskId: string, fileType: 'json' | 'pdf') => void;
+  deleteTask: (taskId: string) => Promise<void>;
   setTaskFilters: (filters: PdfState['taskFilters']) => void;
   clearError: () => void;
   clearSelectedTask: () => void;
@@ -94,7 +95,10 @@ export const usePdfStore = create<PdfState>((set, get) => ({
       // 如果当前选中的任务被刷新，同时更新选中状态
       const currentSelected = get().selectedTask;
       if (currentSelected && currentSelected.task_id === taskId) {
-        set({ selectedTask: task, selectedResult: task.result || null });
+        set({
+          selectedTask: task,
+          selectedResult: task.extracted_info || task.result || null,
+        });
       }
 
       return task; // 返回更新后的任务
@@ -105,13 +109,19 @@ export const usePdfStore = create<PdfState>((set, get) => ({
   },
 
   selectTask: async (task) => {
-    set({ selectedTask: task, selectedResult: task.result || null });
+    set({
+      selectedTask: task,
+      selectedResult: task.extracted_info || task.result || null,
+    });
 
     // 如果任务已完成且没有结果，重新获取
-    if (task.status === 'completed' && !task.result) {
+    if (task.status === 'completed' && !task.extracted_info && !task.result) {
       try {
         const fullTask = await pdfApi.getTaskStatus(task.task_id);
-        set({ selectedTask: fullTask, selectedResult: fullTask.result || null });
+        set({
+          selectedTask: fullTask,
+          selectedResult: fullTask.extracted_info || fullTask.result || null,
+        });
       } catch (error) {
         set({ error: error instanceof Error ? error.message : '加载结果失败' });
       }
@@ -130,6 +140,21 @@ export const usePdfStore = create<PdfState>((set, get) => ({
   downloadFile: (taskId, fileType) => {
     const url = pdfApi.getDownloadUrl(taskId, fileType);
     window.open(url, '_blank');
+  },
+
+  deleteTask: async (taskId) => {
+    try {
+      await pdfApi.deleteTask(taskId);
+      // 删除成功后，从任务列表中移除
+      set((state) => ({
+        tasks: state.tasks.filter((task) => task.task_id !== taskId),
+        selectedTask: state.selectedTask?.task_id === taskId ? null : state.selectedTask,
+        selectedResult: state.selectedTask?.task_id === taskId ? null : state.selectedResult,
+      }));
+    } catch (error) {
+      set({ error: `删除任务失败: ${error instanceof Error ? error.message : '未知错误'}` });
+      throw error;
+    }
   },
 
   setTaskFilters: (filters) => {

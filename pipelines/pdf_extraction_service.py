@@ -66,6 +66,7 @@ class PDFExtractionService:
         user_id: str,
         project_id: str,
         source_filename: str,
+        high_resolution: bool = False,
     ) -> str:
         """
         提交 PDF 提取任务
@@ -75,6 +76,7 @@ class PDFExtractionService:
             user_id: 用户 ID
             project_id: 项目 ID
             source_filename: 原始文件名
+            high_resolution: 是否启用高分辨率模式
             
         Returns:
             task_id: 任务 ID
@@ -84,7 +86,7 @@ class PDFExtractionService:
         if not is_valid:
             raise ValueError(f"PDF 验证失败: {error_msg}")
         
-        logger.info(f"PDF validated: {source_filename}, {page_count} pages")
+        logger.info(f"[PDF Extract] PDF validated: {source_filename}, {page_count} pages")
         
         # 2. 生成任务 ID
         task_id = str(uuid.uuid4())
@@ -100,7 +102,7 @@ class PDFExtractionService:
         )
         
         pdf_url = self.storage.build_public_url(pdf_object_key)
-        logger.info(f"PDF uploaded to OSS: {pdf_url}")
+        logger.info(f"[PDF Extract] PDF uploaded to OSS: {pdf_url}")
         
         # 4. 创建数据库记录
         await create_pdf_extraction_task(
@@ -114,27 +116,24 @@ class PDFExtractionService:
             page_count=page_count,
         )
         
-        logger.info(f"Created task {task_id} for PDF extraction")
+        logger.info(f"[PDF Extract] Created task record in DB: {task_id}")
         
-        # 5. 提交到异步队列处理
-        from pipelines.async_task_queue import get_task_queue, TaskPriority
-        queue = get_task_queue()
-        success = await queue.submit_task(task_id, TaskPriority.NORMAL)
-        if success:
-            logger.info(f"Task {task_id} submitted to processing queue")
-        else:
-            logger.error(f"Failed to submit task {task_id} to queue")
+        # 5. 提交到 Huey 任务队列处理
+        from pipelines.tasks import pdf_extract_process_task
+        pdf_extract_process_task(task_id, high_resolution)
+        logger.info(f"[PDF Extract] Task submitted to Huey queue: {task_id} (high_resolution={high_resolution})")
         
         return task_id
     
-    async def process_pdf(self, task_id: str):
+    async def process_pdf(self, task_id: str, high_resolution: bool = False):
         """
-        处理 PDF 文件 (异步任务)
+        处理 PDF 文件 (由 Huey worker 调用的异步任务)
         
         Args:
             task_id: 任务 ID
+            high_resolution: 是否启用高分辨率模式
         """
-        logger.info(f"[{task_id}] Starting PDF processing")
+        logger.info(f"[PDF Extract] Processing started: {task_id}")
         
         # 本地临时目录
         temp_dir = Path("uploads/pdf") / task_id
@@ -164,7 +163,7 @@ class PDFExtractionService:
             image_paths = await self._convert_pdf_to_images_local(pdf_path, temp_dir)
             
             # 5. 调用 Qwen VL 提取信息（使用本地图片路径）
-            extracted_info = await self._extract_from_local_images(image_paths)
+            extracted_info = await self._extract_from_local_images(image_paths, high_resolution)
             
             # 6. 验证和清洗数据
             extracted_info = self._clean_data(extracted_info)
@@ -192,11 +191,11 @@ class PDFExtractionService:
                 page_image_urls=None,  # 不保存图片 URL
             )
             
-            logger.info(f"[{task_id}] PDF processing completed successfully")
-            logger.info(f"[{task_id}] JSON saved to: {parsed_json_path} & {pdf_json_path}")
+            logger.info(f"[PDF Extract] Processing completed: {task_id}")
+            logger.info(f"[PDF Extract] JSON saved: {parsed_json_path} & {pdf_json_path}")
             
         except Exception as e:
-            logger.error(f"[{task_id}] Processing failed: {e}", exc_info=True)
+            logger.error(f"[PDF Extract] Processing failed: {task_id}", exc_info=True)
             
             # 更新状态为 FAILED
             await update_task_status(
@@ -221,9 +220,9 @@ class PDFExtractionService:
                         item.unlink()
                     elif item.is_dir():
                         shutil.rmtree(item, ignore_errors=True)
-                logger.info(f"[{task_id}] Cleaned up temporary image files (kept PDF & JSON)")
+                logger.info(f"[PDF Extract] Cleaned up temporary files: {task_id}")
     
-    async def _download_pdf_to_local(self, object_key: str, temp_dir: Path, source_filename: str = None) -> Path:
+    def _download_pdf_to_local(self, object_key: str, temp_dir: Path, source_filename: str = None) -> Path:
         """下载 PDF 文件到本地临时目录
         
         Args:
@@ -238,24 +237,25 @@ class PDFExtractionService:
         # 下载文件
         self.storage.bucket.get_object_to_file(object_key, str(pdf_path))
         
-        logger.info(f"Downloaded PDF to {pdf_path}")
+        logger.info(f"[PDF Extract] Downloaded PDF to {pdf_path}")
         return pdf_path
     
-    async def _convert_pdf_to_images_local(self, pdf_path: Path, temp_dir: Path) -> List[Path]:
+    def _convert_pdf_to_images_local(self, pdf_path: Path, temp_dir: Path) -> List[Path]:
         """转换 PDF 为图片（保存到本地）"""
         output_dir = temp_dir / "pages"
         output_dir.mkdir(exist_ok=True)
         
         image_paths = self.pdf_pipeline.convert_to_images(pdf_path, output_dir)
-        logger.info(f"Converted PDF to {len(image_paths)} images")
+        logger.info(f"[PDF Extract] Converted PDF to {len(image_paths)} images")
         return image_paths
     
-    async def _extract_from_local_images(self, image_paths: List[Path]) -> Dict[str, Any]:
+    async def _extract_from_local_images(self, image_paths: List[Path], high_resolution: bool = False) -> Dict[str, Any]:
         """
         从本地图片提取信息（使用 Qwen VL 多图输入）
         
         Args:
             image_paths: 本地图片路径列表
+            high_resolution: 是否启用高分辨率模式
             
         Returns:
             提取的结构化信息
@@ -283,10 +283,11 @@ class PDFExtractionService:
         
         try:
             extra_body = {"enable_thinking": False}
-            if os.getenv("VL_HIGH_RESOLUTION_MODE", "false").lower() == "true":
+            # 优先使用参数，其次使用环境变量
+            if high_resolution or os.getenv("VL_HIGH_RESOLUTION_MODE", "false").lower() == "true":
                 extra_body["vl_high_resolution_images"] = True
             
-            logger.info(f"Calling Qwen VL with {len(image_paths)} images")
+            logger.info(f"[PDF Extract] Calling Qwen VL with {len(image_paths)} images")
             
             completion = self.vl_client.chat.completions.create(
                 model=self.vl_model,
@@ -298,10 +299,10 @@ class PDFExtractionService:
             )
             
             result = json.loads(completion.choices[0].message.content)
-            logger.info("VL extraction successful")
+            logger.info("[PDF Extract] VL extraction successful")
             return result
         except Exception as e:
-            logger.error(f"VL API failed: {e}", exc_info=True)
+            logger.error(f"[PDF Extract] VL API failed: {e}", exc_info=True)
             raise
     
     def _build_pdf_prefix(self, project_id: str, task_id: str) -> str:
@@ -330,7 +331,7 @@ class PDFExtractionService:
         
         return cleaned
     
-    async def _save_json_locally(
+    def _save_json_locally(
         self,
         extracted_info: dict,
         source_filename: str,
@@ -358,7 +359,7 @@ class PDFExtractionService:
         with open(parsed_json_path, "w", encoding="utf-8") as f:
             json.dump(extracted_info, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"Saved JSON to parsed: {parsed_json_path}")
+        logger.info(f"[PDF Extract] Saved JSON to parsed: {parsed_json_path}")
         
         # 2. 保存到 uploads/pdf/{task_id}/ 目录（与 PDF 同目录）
         pdf_temp_dir = Path("uploads") / "pdf" / task_id
@@ -368,11 +369,11 @@ class PDFExtractionService:
         with open(pdf_json_path, "w", encoding="utf-8") as f:
             json.dump(extracted_info, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"Saved JSON to PDF dir: {pdf_json_path}")
+        logger.info(f"[PDF Extract] Saved JSON to PDF dir: {pdf_json_path}")
         
         return parsed_json_path, pdf_json_path
     
-    async def _save_result_to_oss(
+    def _save_result_to_oss(
         self,
         extracted_info: dict,
         oss_prefix: str,
@@ -394,5 +395,5 @@ class PDFExtractionService:
         # 生成 URL
         url = self.storage.build_public_url(object_key)
         
-        logger.info(f"Saved extraction result to OSS: {url}")
+        logger.info(f"[PDF Extract] Saved extraction result to OSS: {url}")
         return url, object_key

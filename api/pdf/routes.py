@@ -9,9 +9,10 @@ Date: 2025-01-13
 
 import os
 import logging
+import tempfile
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Form
@@ -25,7 +26,7 @@ from api.pdf.models import (
     BatchUploadResponse
 )
 from pipelines.pdf_extraction_service import PDFExtractionService
-from pipelines.async_task_queue import get_task_queue
+from pipelines.tasks import get_queue_status
 from db.pdf_operations import list_pdf_extraction_tasks, get_pdf_extraction_task, count_tasks_by_status
 
 logger = logging.getLogger(__name__)
@@ -36,13 +37,10 @@ router = APIRouter(prefix="/api/v1/pdf", tags=["pdf-extraction"])
 # Initialize service
 try:
     pdf_service = PDFExtractionService()
-    logger.info("PDFExtractionService initialized successfully")
+    logger.info("[PDF Extract] PDFExtractionService initialized successfully")
 except Exception as e:
-    logger.error(f"Failed to initialize PDFExtractionService: {e}")
+    logger.error(f"[PDF Extract] Failed to initialize PDFExtractionService: {e}")
     pdf_service = None
-
-# Get task queue instance
-task_queue = get_task_queue()
 
 
 # =============================================================================
@@ -88,8 +86,46 @@ def _validate_pdf_file(file: UploadFile) -> float:
             detail=f"File too large. Max size: {MAX_FILE_SIZE_MB}MB, got: {file_size_mb:.2f}MB"
         )
     
-    logger.info(f"Validated PDF: {filename} ({file_size_mb:.2f}MB)")
+    logger.info(f"[PDF Extract] Validated PDF: {filename} ({file_size_mb:.2f}MB)")
     return file_size_mb
+
+
+async def _save_and_submit_pdf(
+    file: UploadFile,
+    user_id: Optional[str],
+    project_id: Optional[str],
+    high_resolution: bool
+) -> Tuple[str, float]:
+    """
+    Save uploaded PDF to temp location and submit extraction task.
+    
+    Returns:
+        (task_id, file_size_mb)
+    """
+    file_size_mb = _validate_pdf_file(file)
+    
+    temp_dir = Path(tempfile.gettempdir()) / "pdf_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = file.filename or "unknown.pdf"
+    temp_file_path = temp_dir / f"{uuid4()}_{filename}"
+    
+    file_content = await file.read()
+    temp_file_path.write_bytes(file_content)
+    
+    try:
+        task_id = await pdf_service.submit_extraction(
+            pdf_file_path=temp_file_path,
+            user_id=user_id or "default_user",
+            project_id=project_id or "defaultProject",
+            source_filename=filename,
+            high_resolution=high_resolution
+        )
+    finally:
+        if temp_file_path.exists():
+            temp_file_path.unlink()
+    
+    return task_id, file_size_mb
 
 
 # =============================================================================
@@ -135,35 +171,10 @@ async def extract_pdf_bp(
     request_time = datetime.now()
     
     try:
-        # Validate file
-        file_size_mb = _validate_pdf_file(file)
-        
-        # Save file to temporary directory
-        import tempfile
-        from pathlib import Path
-        
-        temp_dir = Path(tempfile.gettempdir()) / "pdf_uploads"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        
-        filename = file.filename or "unknown.pdf"
-        temp_file_path = temp_dir / f"{uuid4()}_{filename}"
-        
-        # Write uploaded file to temp location
-        file_content = await file.read()
-        temp_file_path.write_bytes(file_content)
-        
-        try:
-            # Submit extraction task
-            task_id = await pdf_service.submit_extraction(
-                pdf_file_path=temp_file_path,
-                user_id=user_id or "default_user",
-                project_id=project_id or "defaultProject",
-                source_filename=filename
-            )
-        finally:
-            # Clean up temp file
-            if temp_file_path.exists():
-                temp_file_path.unlink()
+        # Save and submit PDF
+        task_id, file_size_mb = await _save_and_submit_pdf(
+            file, user_id, project_id, high_resolution
+        )
         
         # Estimate processing time (30-60 seconds)
         estimated_time = 30 + (file_size_mb * 2)  # 2 seconds per MB
@@ -185,13 +196,13 @@ async def extract_pdf_bp(
             }
         )
         
-        logger.info(f"PDF extraction task submitted: {task_id}")
+        logger.info(f"[PDF Extract] Task submitted to API: {task_id}")
         return response
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to submit PDF extraction: {e}", exc_info=True)
+        logger.error(f"[PDF Extract] Failed to submit task: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to submit extraction task: {str(e)}"
@@ -241,35 +252,10 @@ async def extract_batch_pdfs(
     
     for file in files:
         try:
-            # Validate each file
-            file_size_mb = _validate_pdf_file(file)
-            
-            # Save file to temporary directory
-            import tempfile
-            from pathlib import Path
-            
-            temp_dir = Path(tempfile.gettempdir()) / "pdf_uploads"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            
-            filename = file.filename or "unknown.pdf"
-            temp_file_path = temp_dir / f"{uuid4()}_{filename}"
-            
-            # Write uploaded file to temp location
-            file_content = await file.read()
-            temp_file_path.write_bytes(file_content)
-            
-            try:
-                # Submit extraction task
-                task_id = await pdf_service.submit_extraction(
-                    pdf_file_path=temp_file_path,
-                    user_id=user_id or "default_user",
-                    project_id=project_id or "defaultProject",
-                    source_filename=filename
-                )
-            finally:
-                # Clean up temp file
-                if temp_file_path.exists():
-                    temp_file_path.unlink()
+            # Save and submit PDF
+            task_id, file_size_mb = await _save_and_submit_pdf(
+                file, user_id, project_id, high_resolution
+            )
             
             task_ids.append({
                 "task_id": task_id,
@@ -277,20 +263,20 @@ async def extract_batch_pdfs(
                 "file_size_mb": round(file_size_mb, 2)
             })
             
-            logger.info(f"Batch task submitted: {task_id} for {file.filename}")
+            logger.info(f"[PDF Extract] Batch task submitted: {task_id} for {file.filename}")
         
         except HTTPException as e:
             failed_submissions.append({
                 "filename": file.filename,
                 "error": e.detail
             })
-            logger.warning(f"Failed to submit {file.filename}: {e.detail}")
+            logger.warning(f"[PDF Extract] Failed to submit {file.filename}: {e.detail}")
         except Exception as e:
             failed_submissions.append({
                 "filename": file.filename,
                 "error": str(e)
             })
-            logger.error(f"Unexpected error for {file.filename}: {e}")
+            logger.error(f"[PDF Extract] Unexpected error for {file.filename}: {e}")
     
     response = BatchUploadResponse(
         success=True,
@@ -307,7 +293,7 @@ async def extract_batch_pdfs(
         }
     )
     
-    logger.info(f"Batch upload completed: {len(task_ids)}/{len(files)} successful")
+    logger.info(f"[PDF Extract] Batch upload completed: {len(task_ids)}/{len(files)} successful")
     return response
 
 
@@ -372,9 +358,8 @@ async def get_task_status(task_id: str):
                 "status": frontend_status,
                 "progress": task.get("progress"),
                 "error": error_message,
-                "created_at": submitted_at.isoformat() if isinstance(submitted_at, datetime) else None,
-                "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
                 "submitted_at": submitted_at.isoformat() if isinstance(submitted_at, datetime) else None,
+                "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
                 "completed_at": completed_at.isoformat() if isinstance(completed_at, datetime) else None,
                 "pdf_url": task.get("pdf_url"),
                 "extracted_info": task.get("extracted_info"),
@@ -504,28 +489,98 @@ async def list_tasks(
         )
 
 
-@router.get("/queue/status", response_model=QueueStatusResponse)
-async def get_queue_status():
+@router.delete("/extract/{task_id}")
+async def delete_task(task_id: str):
     """
-    Get current status of the PDF processing queue.
+    Delete a PDF extraction task and its local files.
+    
+    **Parameters:**
+    - `task_id`: Task identifier
     
     **Returns:**
-    - `active_workers`: Number of currently processing tasks
-    - `pending_tasks`: Number of tasks waiting in queue
-    - `queue_capacity`: Maximum queue size
-    - `is_running`: Whether the queue is active
+    - `success`: Whether the deletion was successful
     """
     try:
-        status = task_queue.get_status()
+        from db.pdf_operations import get_pdf_extraction_task, delete_pdf_extraction_task
+        from pathlib import Path
+        import shutil
+        
+        # 获取任务信息
+        task = await get_pdf_extraction_task(task_id)
+        if not task:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Task {task_id} not found"
+            )
+        
+        # 删除本地临时文件
+        temp_dir = Path("uploads/pdf") / task_id
+        if temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"[PDF Extract] Deleted local files for task: {task_id}")
+            except Exception as e:
+                logger.warning(f"[PDF Extract] Failed to delete local files for task {task_id}: {e}")
+        
+        # 删除数据库记录
+        await delete_pdf_extraction_task(task_id)
+        logger.info(f"[PDF Extract] Task deleted: {task_id}")
+        
+        return {
+            "success": True,
+            "message": f"Task {task_id} and its files have been deleted"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PDF Extract] Failed to delete task {task_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete task: {str(e)}"
+        )
+
+
+@router.get("/queue/status", response_model=QueueStatusResponse)
+async def pdf_queue_status():
+    """
+    Get current status of the PDF processing queue (Huey).
+    
+    **Returns:**
+    - `queue_length`: Number of tasks waiting in queue
+    - `is_running`: Whether the queue is active
+    - `completed_tasks`: Number of completed tasks (from DB)
+    - `active_tasks`: Number of tasks currently processing
+    - `active_workers`: Number of active workers
+    - `pending_tasks`: Number of pending tasks
+    """
+    try:
+        # 获取 Huey 队列状态
+        huey_status = get_queue_status()
+        
+        # 获取已完成任务数
         try:
             completed_count = await count_tasks_by_status("SUCCEEDED")
-            status["completed_tasks"] = completed_count
         except Exception as count_err:
-            logger.warning(f"Failed to count completed tasks: {count_err}")
+            logger.warning(f"[PDF Extract] Failed to count completed tasks: {count_err}")
+            completed_count = 0
+        
+        # 构建完整的 QueueStatus 对象
+        queue_status = {
+            "is_running": huey_status.get("is_running", True),
+            "queue_length": huey_status.get("queue_length", 0),
+            "active_tasks": 0,  # Huey 不直接提供此信息
+            "completed_tasks": completed_count,
+            "active_workers": int(os.getenv("HUEY_WORKERS", "5")),
+            "pending_tasks": huey_status.get("queue_length", 0),
+            "queue_capacity": int(os.getenv("PDF_QUEUE_SIZE", "100")),
+            "max_workers": int(os.getenv("HUEY_WORKERS", "5")),
+            "max_queue_size": int(os.getenv("PDF_QUEUE_SIZE", "100")),
+        }
         
         response = QueueStatusResponse(
             success=True,
-            data=status,
+            data=queue_status,
             error=None,
             metadata={
                 "timestamp": datetime.now().isoformat()
@@ -535,7 +590,7 @@ async def get_queue_status():
         return response
     
     except Exception as e:
-        logger.error(f"Failed to get queue status: {e}", exc_info=True)
+        logger.error(f"[PDF Extract] Failed to get queue status: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get queue status: {str(e)}"
@@ -615,20 +670,20 @@ async def download_task_file(task_id: str, file_type: str):
 
 
 @router.get("/health")
-async def health_check():
+async def pdf_health_check():
     """Health check endpoint for PDF extraction service."""
-    queue_status = task_queue.get_status()
+    queue_status = get_queue_status()
     
     return {
         "status": "healthy" if pdf_service else "unavailable",
         "service": "pdf-extraction",
         "pipeline_available": pdf_service is not None,
         "queue_status": {
-            "running": queue_status["is_running"],
-            "active_workers": queue_status["active_workers"],
-            "pending_tasks": queue_status["pending_tasks"]
+            "running": queue_status.get("is_running", False),
+            "pending_tasks": queue_status.get("queue_length", 0)
         },
         "max_file_size_mb": MAX_FILE_SIZE_MB,
         "max_batch_size": MAX_BATCH_SIZE,
-        "model": "qwen-vl-max"
+        "model": "qwen3-vl-flash",
+        "task_queue": "huey-redis"
     }
