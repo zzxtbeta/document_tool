@@ -511,7 +511,7 @@ def _maybe_upload_minutes_to_oss(record: Dict[str, Any]) -> Dict[str, Any]:
         base_name = Path(source_filename).stem
         
         object_key = storage_client.build_object_key(
-            "bronze", "userUploads", project_id, "audio", task_id, f"{base_name}_minutes.md"
+            "gold", "userUploads", project_id, "audio", task_id, f"{base_name}_minutes.md"
         )
         
         storage_client.upload_file(Path(md_path), object_key, content_type="text/markdown")

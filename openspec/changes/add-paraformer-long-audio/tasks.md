@@ -33,7 +33,7 @@
   - [x] 2.7.1 抽象 `MeetingMinutesService`（或等价拆分）以便独立生成 Markdown/JSON 纪要
   - [x] 2.7.2 长音频任务 SUCCEEDED 时调用纪要服务，保存 Markdown + 结构化结果到数据库字段
   - [x] 2.7.3 `LongAudioStatusResponse` 返回 `meeting_minutes`、`minutes_markdown_path`、`minutes_markdown_url`、`minutes_error`、`minutes_markdown_signed_url` 等可选字段
-  - [x] 2.7.4 引入 `OSSStorageClient`，按 `prefix/bronze/userUploads/{projectId}/audio/{taskId}/` 上传纪要与转写 JSON，记录 OSS URL、object key，并生成 10 分钟有效的签名下载链接
+  - [x] 2.7.4 引入 `OSSStorageClient`，按 `prefix/gold/userUploads/{projectId}/audio/{taskId}/` 上传纪要与转写 JSON，记录 OSS URL、object key，并生成 10 分钟有效的签名下载链接
 
 ## 3. 错误处理与限制
 - [x] 3.1 将 DashScope 错误码映射为相应的 HTTP 响应（如 InvalidFile、DownloadFailed）（submission/fetch 失败会返回 4xx/5xx 并记录日志）

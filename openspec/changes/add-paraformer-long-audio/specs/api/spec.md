@@ -34,7 +34,7 @@
 - **AND** 在状态查询中同时返回本地调试路径与 OSS URL，数据库需记录 URL 以便后续查询
 
 #### Scenario: OSS 私有 Bucket 与签名 URL
-- **GIVEN** OSS bucket 为私有访问、对象路径遵循 `prod/bronze/userUploads/{projectId}/audio/{taskId}/`
+- **GIVEN** OSS bucket 为私有访问、对象路径遵循 `prod/gold/userUploads/{projectId}/audio/{taskId}/`
 - **WHEN** 系统上传转写 JSON 与纪要 Markdown
 - **THEN** `long_audio_tasks` SHALL 记录 `minutes_markdown_object_key`、`remote_result_object_keys` 以及 `minutes_markdown_signed_url`
 - **AND** `GET /api/v1/audio/transcribe-long/{task_id}` 每次请求 SHALL 返回 10 分钟有效的签名下载 URL（若签名失败，以 `minutes_error` 说明）

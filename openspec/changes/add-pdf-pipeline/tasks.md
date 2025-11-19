@@ -106,7 +106,7 @@
   - 添加 PDF 上传方法
   - 添加页面图片上传方法
   - 添加提取结果上传方法
-  - 路径规范: `bronze/userUploads/{projectId}/pdf/{taskId}/`
+  - 路径规范: `gold/userUploads/{projectId}/pdf/{taskId}/`
   - 结果文件命名: `{source_filename}_extracted_info.json`
 
 - [x] **实现 URL 签名** _(已提供 `generate_signed_url`)_

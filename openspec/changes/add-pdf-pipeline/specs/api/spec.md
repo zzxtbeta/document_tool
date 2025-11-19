@@ -20,7 +20,7 @@
 - 响应体应包含 `task_status` 字段,值为 `PENDING`
 - 响应体应包含 `model` 字段,值为 `qwen3-vl-flash`
 - 响应体应包含 `pdf_url` 字段,指向 OSS 上的原始 PDF
-- PDF 文件应被上传到 OSS 路径: `bronze/userUploads/{projectId}/pdf/{taskId}/original.pdf`
+- PDF 文件应被上传到 OSS 路径: `gold/userUploads/{projectId}/pdf/{taskId}/original.pdf`
 - 数据库应创建一条新记录,状态为 `PENDING`
 - 任务应被提交到异步队列
 

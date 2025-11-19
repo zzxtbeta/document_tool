@@ -44,11 +44,11 @@
   ↓
 后端接收文件
   ↓
-上传原始 PDF 到 OSS (bronze/userUploads/{projectId}/pdf/{taskId}/original.pdf)
+上传原始 PDF 到 OSS (gold/userUploads/{projectId}/pdf/{taskId}/original.pdf)
   ↓
 使用 pdf2image 转换为图片
   ↓
-上传图片到 OSS (bronze/userUploads/{projectId}/pdf/{taskId}/pages/page_{n}.jpg)
+上传图片到 OSS (gold/userUploads/{projectId}/pdf/{taskId}/pages/page_{n}.jpg)
   ↓
 返回任务 ID 和处理状态
 ```
@@ -72,7 +72,7 @@
 ```
 结构化 JSON
   ↓
-上传到 OSS (bronze/userUploads/{projectId}/pdf/{taskId}/{source_filename}_extracted_info.json)
+上传到 OSS (gold/userUploads/{projectId}/pdf/{taskId}/{source_filename}_extracted_info.json)
   ↓
 存入 PostgreSQL (pdf_extraction_tasks 表)
   ↓

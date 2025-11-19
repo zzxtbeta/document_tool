@@ -1,10 +1,13 @@
--- 创建 PDF 提取任务表
--- 用于存储 PDF 商业计划书智能解析任务的元数据和提取结果
+-- ============================================================================
+-- PDF 提取任务表重建脚本
+-- 用于在表被意外删除后重新创建
+-- ============================================================================
 
+-- 第一步：创建表（如果不存在）
 CREATE TABLE IF NOT EXISTS pdf_extraction_tasks (
     -- ========== 主键与标识 ==========
     task_id TEXT PRIMARY KEY,
-    task_status TEXT NOT NULL CHECK (task_status IN ('PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED')),
+    task_status TEXT NOT NULL,
     model TEXT NOT NULL DEFAULT 'qwen3-vl-flash',
     
     -- ========== PDF 文件信息 ==========
@@ -51,7 +54,7 @@ CREATE TABLE IF NOT EXISTS pdf_extraction_tasks (
     oss_object_prefix TEXT
 );
 
--- ========== 创建索引 ==========
+-- 第二步：创建索引（如果不存在）
 CREATE INDEX IF NOT EXISTS idx_pdf_tasks_status ON pdf_extraction_tasks(task_status);
 CREATE INDEX IF NOT EXISTS idx_pdf_tasks_industry ON pdf_extraction_tasks(industry);
 CREATE INDEX IF NOT EXISTS idx_pdf_tasks_company ON pdf_extraction_tasks(company_name);
@@ -59,14 +62,39 @@ CREATE INDEX IF NOT EXISTS idx_pdf_tasks_submitted ON pdf_extraction_tasks(submi
 CREATE INDEX IF NOT EXISTS idx_pdf_tasks_user ON pdf_extraction_tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_pdf_tasks_project ON pdf_extraction_tasks(project_id);
 
--- ========== 添加注释 ==========
+-- 第三步：添加表和列注释
 COMMENT ON TABLE pdf_extraction_tasks IS 'PDF 商业计划书智能解析任务表';
 COMMENT ON COLUMN pdf_extraction_tasks.task_id IS '任务唯一标识 (UUID)';
-COMMENT ON COLUMN pdf_extraction_tasks.task_status IS '任务状态: PENDING/PROCESSING/SUCCEEDED/FAILED';
+COMMENT ON COLUMN pdf_extraction_tasks.task_status IS '任务状态: PENDING/PROCESSING/SUCCEEDED/FAILED (有效值: PENDING, PROCESSING, SUCCEEDED, FAILED)';
 COMMENT ON COLUMN pdf_extraction_tasks.model IS '使用的视觉理解模型';
 COMMENT ON COLUMN pdf_extraction_tasks.pdf_url IS 'OSS 上原始 PDF 文件 URL';
+COMMENT ON COLUMN pdf_extraction_tasks.pdf_object_key IS 'OSS 对象键';
+COMMENT ON COLUMN pdf_extraction_tasks.page_count IS 'PDF 页数';
 COMMENT ON COLUMN pdf_extraction_tasks.page_image_urls IS 'PDF 页面图片 URL 列表';
+COMMENT ON COLUMN pdf_extraction_tasks.project_source IS '项目来源';
+COMMENT ON COLUMN pdf_extraction_tasks.project_contact IS '项目联系人';
+COMMENT ON COLUMN pdf_extraction_tasks.contact_info IS '联系方式';
+COMMENT ON COLUMN pdf_extraction_tasks.project_leader IS '项目负责人';
+COMMENT ON COLUMN pdf_extraction_tasks.company_name IS '公司名称';
+COMMENT ON COLUMN pdf_extraction_tasks.company_address IS '公司地址';
+COMMENT ON COLUMN pdf_extraction_tasks.industry IS '所属行业';
 COMMENT ON COLUMN pdf_extraction_tasks.core_team IS '核心团队成员 JSON 数组';
+COMMENT ON COLUMN pdf_extraction_tasks.core_product IS '核心产品描述';
+COMMENT ON COLUMN pdf_extraction_tasks.core_technology IS '核心技术描述';
+COMMENT ON COLUMN pdf_extraction_tasks.competition_analysis IS '竞争情况分析';
+COMMENT ON COLUMN pdf_extraction_tasks.market_size IS '市场空间描述';
 COMMENT ON COLUMN pdf_extraction_tasks.financial_status IS '财务状况 JSON 对象 (current/future)';
+COMMENT ON COLUMN pdf_extraction_tasks.financing_status IS '融资情况描述';
+COMMENT ON COLUMN pdf_extraction_tasks.keywords IS '关键词数组';
 COMMENT ON COLUMN pdf_extraction_tasks.extracted_info IS '完整提取结果 JSON';
+COMMENT ON COLUMN pdf_extraction_tasks.extracted_info_url IS '提取结果 JSON 的 OSS URL';
+COMMENT ON COLUMN pdf_extraction_tasks.extracted_info_object_key IS '提取结果 JSON 的 OSS 对象键';
+COMMENT ON COLUMN pdf_extraction_tasks.submitted_at IS '任务提交时间';
+COMMENT ON COLUMN pdf_extraction_tasks.started_at IS '任务开始处理时间';
+COMMENT ON COLUMN pdf_extraction_tasks.completed_at IS '任务完成时间';
+COMMENT ON COLUMN pdf_extraction_tasks.updated_at IS '最后更新时间';
 COMMENT ON COLUMN pdf_extraction_tasks.error IS '错误信息 JSON';
+COMMENT ON COLUMN pdf_extraction_tasks.user_id IS '用户 ID';
+COMMENT ON COLUMN pdf_extraction_tasks.project_id IS '项目 ID';
+COMMENT ON COLUMN pdf_extraction_tasks.source_filename IS '原始文件名';
+COMMENT ON COLUMN pdf_extraction_tasks.oss_object_prefix IS 'OSS 对象前缀';

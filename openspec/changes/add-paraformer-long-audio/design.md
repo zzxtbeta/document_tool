@@ -44,7 +44,7 @@ DashScope `Transcription` 异步 API 需要先通过 `async_call` 提交任务�
 
 ### OSS 接入与持久化
 - 运行环境提供 OSS（或兼容 S3）的访问凭证，配置项包括 `OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID/SECRET`、`OSS_BASE_PREFIX`（默认 `/prod`）。
-- 统一对象前缀：`{prefix}/bronze/userUploads/{projectId}/audio/{taskId}/`。目前 `projectId`/`userId` 先用默认值（如 `defaultProject`/`admin123`）落库，后续再接入真实租户。`fileId` = `taskId`。
+- 统一对象前缀：`{prefix}/gold/userUploads/{projectId}/audio/{taskId}/`。目前 `projectId`/`userId` 先用默认值（如 `defaultProject`/`admin123`）落库，后续再接入真实租户。`fileId` = `taskId`。
 - 客户端在我们的系统之外先把音频上传到 OSS，因此 `file_urls` 已经指向 OSS；服务端不再重复上传原始音频。
 - 当任务首次 `SUCCEEDED` 时：
   1. 仍在本地暂存 DashScope JSON（方便拼接转写文本/重试）。

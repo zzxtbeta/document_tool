@@ -149,18 +149,20 @@ class PDFExtractionService:
             
             # 2. 获取任务信息
             task = await get_pdf_extraction_task(task_id)
+            logger.info(f"[PDF Extract] Retrieved task from DB: {task}")
             if not task:
+                logger.error(f"[PDF Extract] Task {task_id} not found in database")
                 raise RuntimeError(f"Task {task_id} not found")
             
             # 3. 下载 PDF 到本地临时目录（保持原始文件名）
-            pdf_path = await self._download_pdf_to_local(
+            pdf_path = self._download_pdf_to_local(
                 task["pdf_object_key"], 
                 temp_dir,
                 task["source_filename"]
             )
             
             # 4. 转换为图片（保存到本地）
-            image_paths = await self._convert_pdf_to_images_local(pdf_path, temp_dir)
+            image_paths = self._convert_pdf_to_images_local(pdf_path, temp_dir)
             
             # 5. 调用 Qwen VL 提取信息（使用本地图片路径）
             extracted_info = await self._extract_from_local_images(image_paths, high_resolution)
@@ -169,14 +171,14 @@ class PDFExtractionService:
             extracted_info = self._clean_data(extracted_info)
             
             # 7. 保存 JSON 到本地（两个位置）
-            parsed_json_path, pdf_json_path = await self._save_json_locally(
+            parsed_json_path, pdf_json_path = self._save_json_locally(
                 extracted_info,
                 task["source_filename"],
                 task_id
             )
             
             # 8. 保存结果到 OSS（仅保存 JSON）
-            result_url, result_key = await self._save_result_to_oss(
+            result_url, result_key = self._save_result_to_oss(
                 extracted_info,
                 task["oss_object_prefix"],
                 task["source_filename"]

@@ -53,7 +53,7 @@ class OSSStorageClient:
         return "/".join(filter(None, segments))
 
     def build_audio_prefix(self, project_id: str, task_id: str) -> str:
-        return self.build_object_key("bronze", "userUploads", project_id, "audio", task_id)
+        return self.build_object_key("gold", "userUploads", project_id, "audio", task_id)
 
     def upload_file(self, local_path: Path, object_key: str, content_type: Optional[str] = None) -> None:
         local_path = Path(local_path)

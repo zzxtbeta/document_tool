@@ -169,8 +169,14 @@ class TaskStatusData(BaseModel):
         default=None,
         description="Project leader name"
     )
-    created_at: str = Field(description="Task creation timestamp")
-    updated_at: str = Field(description="Last update timestamp")
+    created_at: Optional[str] = Field(
+        default=None,
+        description="Task creation timestamp"
+    )
+    updated_at: Optional[str] = Field(
+        default=None,
+        description="Last update timestamp"
+    )
     download_urls: Optional[Dict[str, str]] = Field(
         default=None,
         description="Download URLs for result files"

@@ -69,7 +69,9 @@ async def create_pdf_extraction_task(
                 ),
             )
             row = await cur.fetchone()
-            return row if row else {}
+        await conn.commit()
+        logger.info(f"Created PDF extraction task: {task_id}")
+        return row if row else {}
 
 
 async def get_pdf_extraction_task(task_id: str) -> Optional[Dict[str, Any]]:
@@ -138,7 +140,8 @@ async def update_task_status(
             """
             
             await cur.execute(sql, params)
-            logger.info(f"Updated task {task_id} status to {status}")
+        await conn.commit()
+        logger.info(f"Updated task {task_id} status to {status}")
 
 
 async def update_extraction_result(
@@ -214,7 +217,8 @@ async def update_extraction_result(
                     task_id,
                 ),
             )
-            logger.info(f"Updated extraction result for task {task_id}")
+        await conn.commit()
+        logger.info(f"Updated extraction result for task {task_id}")
 
 
 async def list_pdf_extraction_tasks(

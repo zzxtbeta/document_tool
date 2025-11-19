@@ -753,7 +753,7 @@ DASHSCOPE_API_KEY=sk-xxx
 # OSS 存储
 OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
 OSS_BUCKET=your-bucket
-OSS_PDF_PREFIX=bronze/userUploads
+OSS_PDF_PREFIX=gold/userUploads
 
 # PDF 处理限制 (根据官方文档)
 PDF_MAX_SIZE_MB=50              # 建议 < 50MB (官方无明确限制)
