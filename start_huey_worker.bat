@@ -27,7 +27,7 @@ REM 启动 Huey worker
 REM -w: worker 数量
 REM -k: worker 类型 (thread/process)
 REM -v: verbose 日志
-huey_consumer pipelines.tasks.huey ^
+huey_consumer pipelines.queue_tasks.huey ^
     -w !WORKERS! ^
     -k !WORKER_TYPE! ^
     -v

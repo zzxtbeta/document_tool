@@ -39,21 +39,23 @@ CREATE INDEX IF NOT EXISTS idx_users_status ON gold.users(status);
 -- 3) projects
 CREATE TABLE IF NOT EXISTS gold.projects (
   id         VARCHAR(31) PRIMARY KEY,
-  project_name       VARCHAR(200),
-  company_name       VARCHAR(200),
-  company_address    VARCHAR(200),
-  contact_info       JSONB,               -- 自动识别联系人快照
+  project_name       TEXT,
+  company_name       TEXT,
+  company_address    TEXT,
+  project_contact    TEXT,
+  contact_info       TEXT,
   industry           TEXT,
+  core_team          JSONB,
   core_product       TEXT,
-  core_tech          TEXT,
-  competition        TEXT,
-  market             TEXT,
-  financials         JSONB,
+  core_technology    TEXT,
+  competition_analysis  TEXT,
+  market_size           TEXT,
+  financial_status   JSONB,
   financing_history  JSONB,
   uploaded_by         VARCHAR(31) NOT NULL REFERENCES gold.users(id),
   status             VARCHAR(20) DEFAULT 'draft'
                      CHECK (status IN ('draft','pending_acceptance','accepted','due_diligence','approved','tracking','archived')),
-  tags               TEXT[],
+  keywords           TEXT[],
   acceptance_at      TIMESTAMP,
   description        TEXT,
   created_at         TIMESTAMP DEFAULT NOW(),
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS gold.projects (
 CREATE INDEX IF NOT EXISTS idx_projects_uploaded_by   ON gold.projects(uploaded_by);
 CREATE INDEX IF NOT EXISTS idx_projects_status       ON gold.projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_company_name ON gold.projects(company_name);
-CREATE INDEX IF NOT EXISTS idx_projects_tags    ON gold.projects USING GIN (tags);
+CREATE INDEX IF NOT EXISTS idx_projects_keywords ON gold.projects USING GIN (keywords);
 
 -- 4) project_files
 CREATE TABLE IF NOT EXISTS gold.project_files (
@@ -73,7 +75,7 @@ CREATE TABLE IF NOT EXISTS gold.project_files (
   file_size            BIGINT,
   file_hash            VARCHAR(64),
   doc_type             VARCHAR(50) NOT NULL,
-  gold_path          VARCHAR(500),
+  bronze_path          VARCHAR(500),
   silver_markdown_path VARCHAR(500),
   file_card            JSONB,
   uploaded_by          VARCHAR(31) NOT NULL REFERENCES gold.users(id),
@@ -104,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_pp_user    ON gold.project_permissions(user_id);
 CREATE TABLE IF NOT EXISTS gold.data_lineage (
   id             VARCHAR(31) PRIMARY KEY,
   parent_lineage_id      VARCHAR(31) REFERENCES gold.data_lineage(id) ON DELETE SET NULL,
-  layer                  VARCHAR(20) NOT NULL CHECK (layer IN ('gold','silver','gold')),
+  layer                  VARCHAR(20) NOT NULL CHECK (layer IN ('bronze','silver','gold')),
   source_entity_type     VARCHAR(50),
   source_entity_id       VARCHAR(200),
   source_path            TEXT,

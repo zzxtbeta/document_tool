@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from api.pdf.models import PDFExtractionResponse, PDFTaskStatusResponse, PDFTaskListResponse
 from pipelines.pdf_extraction_service import PDFExtractionService
-from db.pdf_operations import get_pdf_extraction_task, list_pdf_extraction_tasks
+from db.pdf_operations import get_pdf_queue_task, list_pdf_queue_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ async def get_process_task_status(task_id: str):
     ```
     """
     try:
-        task = await get_pdf_extraction_task(task_id)
+        task = await get_pdf_queue_task(task_id)
         
         if not task:
             raise HTTPException(
@@ -251,20 +251,14 @@ async def get_process_task_status(task_id: str):
         
         # Build download URLs if completed
         download_urls = None
-        if task["task_status"] == "SUCCEEDED" and task.get("extracted_info_url"):
+        if task["task_status"] == "completed" and task.get("extracted_info_url"):
             download_urls = {
                 "json": task.get("extracted_info_url"),
                 "original_pdf": task.get("pdf_url")
             }
         
-        # 映射任务状态：SUCCEEDED -> completed
-        task_status = task["task_status"]
-        if task_status == "SUCCEEDED":
-            frontend_status = "completed"
-        elif task_status in ["PENDING", "PROCESSING", "FAILED"]:
-            frontend_status = task_status.lower()
-        else:
-            frontend_status = "pending"
+        # 任务状态直接使用（已是小写）
+        frontend_status = task["task_status"]
         
         submitted_at = task.get("submitted_at")
         updated_at = task.get("updated_at")
@@ -294,10 +288,6 @@ async def get_process_task_status(task_id: str):
                 "extracted_info": task.get("extracted_info"),
                 "extracted_info_url": task.get("extracted_info_url"),
                 "extracted_info_object_key": task.get("extracted_info_object_key"),
-                "company_name": task.get("company_name"),
-                "industry": task.get("industry"),
-                "project_contact": task.get("project_contact"),
-                "project_leader": task.get("project_leader"),
                 "download_urls": download_urls
             },
             error=None,
@@ -344,11 +334,10 @@ async def list_process_tasks(
     - `page_size`: 每页数量
     """
     try:
-        tasks, total = await list_pdf_extraction_tasks(
+        tasks, total = await list_pdf_queue_tasks(
             user_id=user_id,
             project_id=project_id,
             status=status,
-            industry=None,
             page=page,
             page_size=page_size
         )
@@ -364,21 +353,13 @@ async def list_process_tasks(
             else:
                 summary_error = str(error_payload) if error_payload else None
             
-            # 映射任务状态：PENDING/PROCESSING/SUCCEEDED/FAILED -> pending/processing/completed/failed
+            # 任务状态直接使用（已是小写）
             task_status = task["task_status"]
-            if task_status == "SUCCEEDED":
-                frontend_status = "completed"
-            elif task_status in ["PENDING", "PROCESSING", "FAILED"]:
-                frontend_status = task_status.lower()
-            else:
-                frontend_status = "pending"  # 默认值
             
             task_summaries.append({
                 "task_id": task["task_id"],
-                "status": frontend_status,
+                "status": task_status,
                 "original_filename": task.get("source_filename", "unknown.pdf"),
-                "company_name": task.get("company_name"),
-                "industry": task.get("industry"),
                 "submitted_at": submitted_at.isoformat() if isinstance(submitted_at, datetime) else None,
                 "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
                 "error": summary_error

@@ -27,7 +27,7 @@ from api.pdf.models import (
 )
 from pipelines.pdf_extraction_service import PDFExtractionService
 from pipelines.queue_tasks import get_queue_status
-from db.pdf_operations import list_pdf_extraction_tasks, get_pdf_extraction_task, count_tasks_by_status
+from db.pdf_operations import list_pdf_queue_tasks, get_pdf_queue_task, count_tasks_by_status
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,7 @@ async def get_task_status(task_id: str):
     - `download_urls`: URLs to download result files
     """
     try:
-        task = await get_pdf_extraction_task(task_id)
+        task = await get_pdf_queue_task(task_id)
         
         if not task:
             raise HTTPException(
@@ -322,20 +322,14 @@ async def get_task_status(task_id: str):
         
         # Build download URLs if completed
         download_urls = None
-        if task["task_status"] == "SUCCEEDED" and task.get("extracted_info_url"):
+        if task["task_status"] == "completed" and task.get("extracted_info_url"):
             download_urls = {
                 "json": task.get("extracted_info_url"),
                 "original_pdf": task.get("pdf_url")
             }
         
-        # 映射任务状态：SUCCEEDED -> completed
-        task_status = task["task_status"]
-        if task_status == "SUCCEEDED":
-            frontend_status = "completed"
-        elif task_status in ["PENDING", "PROCESSING", "FAILED"]:
-            frontend_status = task_status.lower()
-        else:
-            frontend_status = "pending"
+        # 任务状态直接使用（已是小写）
+        frontend_status = task["task_status"]
         
         submitted_at = task.get("submitted_at")
         updated_at = task.get("updated_at")
@@ -417,11 +411,10 @@ async def list_tasks(
     - `page_size`: Items per page
     """
     try:
-        tasks, total = await list_pdf_extraction_tasks(
+        tasks, total = await list_pdf_queue_tasks(
             user_id=user_id,
             project_id=project_id,
             status=status,
-            industry=industry,
             page=page,
             page_size=page_size
         )
@@ -437,14 +430,8 @@ async def list_tasks(
             else:
                 summary_error = str(error_payload) if error_payload else None
             
-            # 映射任务状态：PENDING/PROCESSING/SUCCEEDED/FAILED -> pending/processing/completed/failed
-            task_status = task["task_status"]
-            if task_status == "SUCCEEDED":
-                frontend_status = "completed"
-            elif task_status in ["PENDING", "PROCESSING", "FAILED"]:
-                frontend_status = task_status.lower()
-            else:
-                frontend_status = "pending"  # 默认值
+            # 任务状态直接使用（已是小写）
+            frontend_status = task["task_status"]
             
             task_summaries.append({
                 "task_id": task["task_id"],

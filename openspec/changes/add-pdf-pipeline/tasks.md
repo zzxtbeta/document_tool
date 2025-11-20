@@ -2,6 +2,48 @@
 
 本文档列出实现 PDF 商业计划书智能解析功能的所有任务,按优先级和依赖关系组织。
 
+## 当前迭代 (Phase 5): 数据库重构与同事仓库集成 (2025-11-20)
+
+### 5.1 数据库表结构优化
+
+- [ ] **创建新的迁移脚本** _(新增: `db/migrations/create_pdf_queue_tasks.sql`)_
+  - 创建 `pdf_queue_tasks` 表（任务管理）
+  - 创建 `projects` 表（与同事仓库保持一致）
+  - 添加 FK 约束和索引
+  - 支持表不存在时自动创建
+
+- [ ] **更新数据库操作** _(修改: `db/pdf_operations.py`)_
+  - 新增 `create_pdf_queue_task()` 函数
+  - 新增 `get_pdf_queue_task()` 函数
+  - 新增 `list_pdf_queue_tasks()` 函数
+  - 新增 `update_pdf_queue_task()` 函数
+  - 新增 `update_project_fields()` 函数（更新 projects 表）
+  - 保持向后兼容
+
+### 5.2 业务逻辑适配
+
+- [ ] **更新 PDF 提取服务** _(修改: `pipelines/pdf_extraction_service.py`)_
+  - 改为使用 `pdf_queue_tasks` 表
+  - 分离任务管理和项目数据更新
+  - 保持现有功能不变
+
+### 5.3 API 接口适配
+
+- [ ] **更新新接口** _(修改: `api/pdf/pdf_routes.py`)_
+  - 改为查询 `pdf_queue_tasks` 表
+  - 保持 API 响应格式不变
+
+- [ ] **更新旧接口** _(修改: `api/pdf/routes.py`)_
+  - 改为查询 `pdf_queue_tasks` 表
+  - 保持向后兼容
+
+### 5.4 验证与测试
+
+- [ ] **功能验证**
+  - 验证两个 API 接口正常使用
+  - 验证没有使用不存在的字段
+  - 验证新字段有获取方式
+
 ## 当前迭代 (Phase 4): 系统集成接口 (2025-11-19) ✅ 完成
 
 ### 4.1 Qwen VL 调用方式优化

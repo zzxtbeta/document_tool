@@ -64,21 +64,26 @@ class DatabaseManager:
             )  # set the health check time when initializing
             logger.info("Database connection pool initialized successfully")
             
-            # 自动创建 PDF 提取表
-            await cls._ensure_pdf_table_exists()
+            # 自动创建 PDF 相关表
+            await cls._ensure_pdf_tables_exist()
         except Exception as e:
             logger.error(f"Database connection pool initialization failed: {str(e)}")
             raise
     
     @classmethod
-    async def _ensure_pdf_table_exists(cls) -> None:
-        """确保 PDF 提取表存在"""
+    async def _ensure_pdf_tables_exist(cls) -> None:
+        """确保 PDF 相关表存在（projects 和 pdf_queue_tasks）"""
         try:
             from pathlib import Path
-            sql_path = Path(__file__).parent / "migrations" / "create_pdf_extraction_tasks.sql"
+            
+            # 优先使用新的迁移脚本（包含 projects 和 pdf_queue_tasks）
+            sql_path = Path(__file__).parent / "migrations" / "create_pdf_queue_tasks.sql"
             if not sql_path.exists():
-                logger.debug("PDF table migration not found, skipping")
-                return
+                # 回退到旧的迁移脚本
+                sql_path = Path(__file__).parent / "migrations" / "create_pdf_extraction_tasks.sql"
+                if not sql_path.exists():
+                    logger.debug("PDF table migration not found, skipping")
+                    return
                 
             sql = sql_path.read_text(encoding="utf-8")
             # 拆分多条 SQL 语句并逐条执行
@@ -87,9 +92,9 @@ class DatabaseManager:
                 for statement in statements:
                     if statement:  # 跳过空语句
                         await conn.execute(statement)
-            logger.info("PDF extraction table ensured")
+            logger.info("PDF tables ensured (projects and pdf_queue_tasks)")
         except Exception as e:
-            logger.warning(f"Failed to ensure PDF table: {e}")
+            logger.warning(f"Failed to ensure PDF tables: {e}")
 
     @classmethod
     async def get_pool(cls, max_retries: int = 3) -> AsyncConnectionPool:

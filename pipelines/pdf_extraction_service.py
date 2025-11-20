@@ -22,6 +22,13 @@ from db.pdf_operations import (
     get_pdf_extraction_task,
     update_task_status,
     update_extraction_result,
+    list_pdf_extraction_tasks,
+    # 新的 pdf_queue_tasks 表操作
+    create_pdf_queue_task,
+    get_pdf_queue_task,
+    update_pdf_queue_task,
+    update_pdf_queue_task_result,
+    update_project_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,16 +111,17 @@ class PDFExtractionService:
         pdf_url = self.storage.build_public_url(pdf_object_key)
         logger.info(f"[PDF Extract] PDF uploaded to OSS: {pdf_url}")
         
-        # 4. 创建数据库记录
-        await create_pdf_extraction_task(
+        # 4. 创建数据库记录（使用新的 pdf_queue_tasks 表）
+        await create_pdf_queue_task(
             task_id=task_id,
+            project_id=project_id,
             pdf_url=pdf_url,
             pdf_object_key=pdf_object_key,
-            user_id=user_id,
-            project_id=project_id,
             source_filename=source_filename,
             oss_object_prefix=oss_prefix,
             page_count=page_count,
+            user_id=user_id,
+            high_resolution=high_resolution,
         )
         
         logger.info(f"[PDF Extract] Created task record in DB: {task_id}")
@@ -135,7 +143,7 @@ class PDFExtractionService:
         retry_count: int = 1,
     ) -> List[Dict[str, Any]]:
         """
-        从 OSS 提交 PDF 提取任务（用于系统集成）
+        从 OSS 提交 PDF 提取任务（用于外部系统集成）
         
         Args:
             oss_key_list: OSS 文件路径列表
@@ -161,20 +169,21 @@ class PDFExtractionService:
                 # 从 OSS key 提取文件名
                 source_filename = oss_key.split('/')[-1]
                 
-                # 创建数据库记录
-                await create_pdf_extraction_task(
+                # 创建数据库记录（使用新的 pdf_queue_tasks 表）
+                await create_pdf_queue_task(
                     task_id=task_id,
+                    project_id=project_id,
                     pdf_url=self.storage.build_public_url(oss_key),
                     pdf_object_key=oss_key,
                     user_id=user_id,
-                    project_id=project_id,
                     source_filename=source_filename,
                     oss_object_prefix=oss_key.rsplit('/', 1)[0],  # 提取目录前缀
                     page_count=None,  # 稍后在处理时获取
                     file_id=file_id,  # 关联上传系统的文件 ID
+                    high_resolution=high_resolution,
                 )
                 
-                logger.info(f"[PDF Extract] Created task record: {task_id} (oss_key={oss_key})")
+                logger.info(f"[PDF Extract] Created queue task record: {task_id} (oss_key={oss_key})")
                 
                 # 提交到 Huey 队列
                 from pipelines.queue_tasks import pdf_extract_process_task
@@ -211,19 +220,19 @@ class PDFExtractionService:
         temp_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # 1. 更新状态为 PROCESSING
-            await update_task_status(
-                task_id,
-                "PROCESSING",
-                started_at=datetime.now()
-            )
-            
-            # 2. 获取任务信息
-            task = await get_pdf_extraction_task(task_id)
-            logger.info(f"[PDF Extract] Retrieved task from DB: {task}")
+            # 1. 获取任务信息（从新的 pdf_queue_tasks 表）
+            task = await get_pdf_queue_task(task_id)
+            logger.info(f"[PDF Extract] Retrieved queue task from DB: {task}")
             if not task:
                 logger.error(f"[PDF Extract] Task {task_id} not found in database")
                 raise RuntimeError(f"Task {task_id} not found")
+            
+            # 2. 更新状态为 processing
+            await update_pdf_queue_task(
+                task_id,
+                "processing",
+                started_at=datetime.now()
+            )
             
             # 3. 下载 PDF 到本地临时目录（保持原始文件名）
             pdf_path = self._download_pdf_to_local(
@@ -256,13 +265,21 @@ class PDFExtractionService:
             )
             
             # 9. 更新数据库
-            await update_extraction_result(
+            # 9.1 更新 pdf_queue_tasks 表（任务结果）
+            await update_pdf_queue_task_result(
                 task_id=task_id,
                 extracted_info=extracted_info,
                 extracted_info_url=result_url,
                 extracted_info_object_key=result_key,
-                page_image_urls=None,  # 不保存图片 URL
             )
+            
+            # 9.2 更新 projects 表（项目字段）
+            if task.get("project_id"):
+                await update_project_fields(
+                    project_id=task["project_id"],
+                    extracted_info=extracted_info,
+                )
+                logger.info(f"[PDF Extract] Updated project fields for project {task['project_id']}")
             
             logger.info(f"[PDF Extract] Processing completed: {task_id}")
             logger.info(f"[PDF Extract] JSON saved: {parsed_json_path} & {pdf_json_path}")
@@ -270,10 +287,10 @@ class PDFExtractionService:
         except Exception as e:
             logger.error(f"[PDF Extract] Processing failed: {task_id}", exc_info=True)
             
-            # 更新状态为 FAILED
-            await update_task_status(
+            # 更新状态为 failed（使用新表）
+            await update_pdf_queue_task(
                 task_id,
-                "FAILED",
+                "failed",
                 completed_at=datetime.now(),
                 error={
                     "type": type(e).__name__,

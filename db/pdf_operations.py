@@ -336,3 +336,317 @@ async def delete_pdf_extraction_task(task_id: str) -> bool:
                 (task_id,)
             )
             return cur.rowcount > 0
+
+
+# ============================================================================
+# 新的 pdf_queue_tasks 表操作函数（用于同事仓库集成）
+# ============================================================================
+
+async def create_pdf_queue_task(
+    task_id: str,
+    project_id: str,
+    pdf_url: str,
+    pdf_object_key: str,
+    source_filename: str,
+    oss_object_prefix: str,
+    page_count: Optional[int] = None,
+    file_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    model: str = "qwen3-vl-flash",
+    high_resolution: bool = False,
+) -> Dict[str, Any]:
+    """
+    创建 PDF 队列任务记录
+    
+    Args:
+        task_id: 任务 ID
+        project_id: 项目 ID
+        pdf_url: PDF 文件 URL
+        pdf_object_key: OSS 对象键
+        source_filename: 原始文件名
+        oss_object_prefix: OSS 对象前缀
+        page_count: 页数
+        file_id: 文件 ID
+        user_id: 用户 ID
+        model: 使用的模型
+        high_resolution: 是否启用高分辨率
+        
+    Returns:
+        创建的任务记录
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                INSERT INTO pdf_queue_tasks (
+                    task_id, task_status, model, project_id, file_id,
+                    pdf_url, pdf_object_key, page_count,
+                    user_id, source_filename, oss_object_prefix,
+                    high_resolution, submitted_at, updated_at, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
+                RETURNING *
+                """,
+                (
+                    task_id,
+                    "pending",
+                    model,
+                    project_id,
+                    file_id,
+                    pdf_url,
+                    pdf_object_key,
+                    page_count,
+                    user_id,
+                    source_filename,
+                    oss_object_prefix,
+                    high_resolution,
+                ),
+            )
+            row = await cur.fetchone()
+        await conn.commit()
+        logger.info(f"Created PDF queue task: {task_id}")
+        return row if row else {}
+
+
+async def get_pdf_queue_task(task_id: str) -> Optional[Dict[str, Any]]:
+    """
+    根据 task_id 查询 PDF 队列任务
+    
+    Args:
+        task_id: 任务 ID
+        
+    Returns:
+        任务记录，不存在则返回 None
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT * FROM pdf_queue_tasks WHERE task_id = %s
+                """,
+                (task_id,),
+            )
+            row = await cur.fetchone()
+            return row
+
+
+async def update_pdf_queue_task(
+    task_id: str,
+    status: str,
+    started_at: Optional[datetime] = None,
+    completed_at: Optional[datetime] = None,
+    error: Optional[Dict] = None,
+) -> None:
+    """
+    更新 PDF 队列任务状态
+    
+    Args:
+        task_id: 任务 ID
+        status: 新状态 (pending/processing/completed/failed)
+        started_at: 开始时间
+        completed_at: 完成时间
+        error: 错误信息
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            # 构建动态 SQL
+            set_fields = ["task_status = %s", "updated_at = NOW()"]
+            params = [status]
+            
+            if started_at:
+                set_fields.append("started_at = %s")
+                params.append(started_at)
+            if completed_at:
+                set_fields.append("completed_at = %s")
+                params.append(completed_at)
+            if error:
+                set_fields.append("error = %s")
+                params.append(Jsonb(error))
+                
+            params.append(task_id)
+            
+            sql = f"""
+                UPDATE pdf_queue_tasks 
+                SET {', '.join(set_fields)}
+                WHERE task_id = %s
+            """
+            
+            await cur.execute(sql, params)
+        await conn.commit()
+        logger.info(f"Updated PDF queue task {task_id} status to {status}")
+
+
+async def update_pdf_queue_task_result(
+    task_id: str,
+    extracted_info: Dict[str, Any],
+    extracted_info_url: str,
+    extracted_info_object_key: str,
+) -> None:
+    """
+    更新 PDF 队列任务的提取结果
+    
+    Args:
+        task_id: 任务 ID
+        extracted_info: 提取的完整信息
+        extracted_info_url: OSS JSON 文件 URL
+        extracted_info_object_key: OSS object key
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                UPDATE pdf_queue_tasks 
+                SET 
+                    task_status = 'completed',
+                    extracted_info = %s,
+                    extracted_info_url = %s,
+                    extracted_info_object_key = %s,
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE task_id = %s
+                """,
+                (
+                    Jsonb(extracted_info),
+                    extracted_info_url,
+                    extracted_info_object_key,
+                    task_id,
+                ),
+            )
+        await conn.commit()
+        logger.info(f"Updated PDF queue task result for task {task_id}")
+
+
+async def update_project_fields(
+    project_id: str,
+    extracted_info: Dict[str, Any],
+) -> None:
+    """
+    更新项目表中的提取字段（不存在则创建）
+    
+    Args:
+        project_id: 项目 ID
+        extracted_info: 提取的完整信息
+    """
+    pool = await DatabaseManager.get_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                INSERT INTO projects (
+                    id, project_name, company_name, company_address, 
+                    project_contact, contact_info, project_leader, industry, core_team,
+                    core_product, core_technology, competition_analysis,
+                    market_size, financial_status, financing_history, keywords,
+                    created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    project_name = EXCLUDED.project_name,
+                    company_name = EXCLUDED.company_name,
+                    company_address = EXCLUDED.company_address,
+                    project_contact = EXCLUDED.project_contact,
+                    contact_info = EXCLUDED.contact_info,
+                    project_leader = EXCLUDED.project_leader,
+                    industry = EXCLUDED.industry,
+                    core_team = EXCLUDED.core_team,
+                    core_product = EXCLUDED.core_product,
+                    core_technology = EXCLUDED.core_technology,
+                    competition_analysis = EXCLUDED.competition_analysis,
+                    market_size = EXCLUDED.market_size,
+                    financial_status = EXCLUDED.financial_status,
+                    financing_history = EXCLUDED.financing_history,
+                    keywords = EXCLUDED.keywords,
+                    updated_at = NOW()
+                """,
+                (
+                    project_id,
+                    extracted_info.get("project_name"),
+                    extracted_info.get("company_name"),
+                    extracted_info.get("company_address"),
+                    extracted_info.get("project_contact"),
+                    extracted_info.get("contact_info"),
+                    extracted_info.get("project_leader"),
+                    extracted_info.get("industry"),
+                    Jsonb(extracted_info.get("core_team", [])),
+                    extracted_info.get("core_product"),
+                    extracted_info.get("core_technology"),
+                    extracted_info.get("competition_analysis"),
+                    extracted_info.get("market_size"),
+                    Jsonb(extracted_info.get("financial_status", {})),
+                    Jsonb(extracted_info.get("financing_history", {})),
+                    extracted_info.get("keywords", []),
+                ),
+            )
+        await conn.commit()
+        logger.info(f"Updated project fields for project {project_id}")
+
+
+async def list_pdf_queue_tasks(
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[List[Dict[str, Any]], int]:
+    """
+    列出 PDF 队列任务 (带分页和筛选)
+    
+    Args:
+        user_id: 用户 ID 筛选
+        project_id: 项目 ID 筛选
+        status: 状态筛选 (pending/processing/completed/failed)
+        page: 页码 (从 1 开始)
+        page_size: 每页大小
+        
+    Returns:
+        (任务列表, 总数)
+    """
+    pool = await DatabaseManager.get_pool()
+    
+    # 构建筛选条件
+    where_clauses = []
+    params = []
+    
+    if user_id:
+        where_clauses.append("user_id = %s")
+        params.append(user_id)
+    if project_id:
+        where_clauses.append("project_id = %s")
+        params.append(project_id)
+    if status:
+        where_clauses.append("task_status = %s")
+        params.append(status)
+        
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    
+    async with pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            # 查询总数
+            await cur.execute(
+                f"SELECT COUNT(*) AS total FROM pdf_queue_tasks {where_sql}",
+                params,
+            )
+            count_row = await cur.fetchone()
+            total = count_row["total"] if count_row else 0
+            
+            # 查询数据
+            offset = (page - 1) * page_size
+            query_params = params + [page_size, offset]
+            
+            await cur.execute(
+                f"""
+                SELECT * FROM pdf_queue_tasks 
+                {where_sql}
+                ORDER BY submitted_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                query_params,
+            )
+            
+            rows = await cur.fetchall()
+            tasks = list(rows)
+            
+            return tasks, total
